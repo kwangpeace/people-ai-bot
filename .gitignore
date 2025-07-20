@@ -1,0 +1,13 @@
+# Python cache files
+__pycache__/
+*.pyc
+
+# ChromaDB local database
+chroma_db/
+
+# Log files
+*.log
+
+# IDE settings
+.idea/
+.vscode/
