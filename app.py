@@ -98,8 +98,6 @@ class PeopleAIBot:
         self.setup_personalities()
         self.setup_responses()
         self.setup_ocr_fixes()
-        self.setup_faq()
-        self.setup_key_info() 
         self.setup_events()
         
         if self.collection.count() == 0:
@@ -158,17 +156,14 @@ class PeopleAIBot:
         }
         logger.info("성격 설정 완료.")
 
-    # *** 수정된 부분: 'searching' 메시지 추가 ***
     def setup_responses(self):
-        """상황별 기본 응답 메시지를 설정합니다."""
         self.responses = {
             "searching": [
                 "생각하는 중입니다... 🤔",
                 "잠시만 기다려주세요. 피플AI가 열심히 답을 찾고 있어요! 🏃‍♂️",
-                "데이터를 분석하고 있어요. 곧 답변해 드릴게요! 📊",
+                "데이터를 분석하고 있어요. 곧 답변해 드릴게요! �",
                 "가이드북을 샅샅이 뒤지는 중... 📚"
             ],
-            "found": ["찾았습니다! 가이드에 따르면 다음과 같아요. ✅", "궁금하신 내용은 이렇게 정리됩니다. 💡"],
             "not_found": ["음, 문의주신 부분은 제가 지금 명확히 답변드리기 어렵네요. ⚠️", "제가 아는 선에서는 해당 정보가 확인되지 않아요. ❌"],
             "signature": ["- 중고나라 피플AI 드림 ✨"]
         }
@@ -180,36 +175,6 @@ class PeopleAIBot:
             "택배실": "택배실", "결제": "결재", "급여명세서": "급여명세서"
         }
         logger.info("OCR 수정 맵 설정 완료.")
-
-    def setup_faq(self):
-        self.faq = {
-            "연차 신청 방법": "✅ HR포털에서 최소 3일 전에 신청하세요.\n입사 1년 미만 11일, 이후 연 15일(최대 25일) 제공됩니다.",
-            "회의실 예약": "⏰ 구글 캘린더로 예약하세요.\n최대 2주 전 신청 가능합니다.",
-            "택배 발송": "📦 사내 택배실에서 주 1회 지정일에 가능합니다.\n자세한 일정은 people@jungonara.com으로 문의하세요."
-        }
-        logger.info("FAQ 설정 완료.")
-
-    def setup_key_info(self):
-        """회사 주소, 와이파이, 담당자 등 핵심 정보를 미리 설정합니다."""
-        self.key_info = [
-            {
-                "keywords": ["주소", "위치", "어디"],
-                "answer": "✅ 우리 회사 주소는 '서울특별시 강남구 테헤란로 415, L7 HOTELS 강남타워 4층'입니다."
-            },
-            {
-                "keywords": ["와이파이", "wifi", "wi-fi", "인터넷"],
-                "answer": "✅ 직원용 와이파이는 'joonggonara-5G'이며, 비밀번호는 'jn2023!@'입니다.\n✅ 방문객용은 'joonggonara-guest-5G'이며, 비밀번호는 'guest2023!@'입니다."
-            },
-            {
-                "keywords": ["택배마감", "택배 마감", "택배시간", "택배 시간"],
-                "answer": "✅ 사내 택배 마감 시간은 평일 오후 1시입니다. 주말에는 수거하지 않으니 참고해주세요."
-            },
-            {
-                "keywords": ["근태 담당자", "근태담당자", "근태 문의"],
-                "answer": "✅ Flex 근태, 휴가 관련 문의는 피플팀 이성헌님께 하시면 됩니다."
-            }
-        ]
-        logger.info("주요 정보(Key Info) 설정 완료.")
 
     def setup_events(self):
         self.events = [
@@ -256,75 +221,60 @@ class PeopleAIBot:
             logger.error(f"언어 감지 또는 번역 실패: {e}", exc_info=True)
             return text
 
+    # *** 수정된 부분: 키워드 검색 로직 제거 ***
     def search_knowledge(self, query, n_results=3):
+        """사용자 질문에 대해 ChromaDB와 Gemini를 사용해 답변을 검색하고 생성합니다."""
         processed_query = self.detect_and_translate_language(query)
         for wrong, correct in self.ocr_fixes.items():
             processed_query = processed_query.replace(wrong, correct)
         
-        for info in self.key_info:
-            for keyword in info["keywords"]:
-                if keyword in processed_query:
-                    logger.info(f"주요 정보에서 일치하는 키워드({keyword}) 발견.")
-                    return [info["answer"]], "key_info"
+        # ChromaDB에서 관련 문서 검색
+        try:
+            context_docs = self.collection.query(
+                query_embeddings=self.embedding_model.encode([processed_query]).tolist(),
+                n_results=n_results
+            )
+            context = "\n".join(context_docs['documents'][0]) if context_docs and context_docs['documents'] else ""
+            logger.info(f"ChromaDB 검색 완료. 쿼리: {processed_query[:50]}...")
+        except Exception as e:
+            logger.error(f"ChromaDB 검색 실패: {e}", exc_info=True)
+            context = "" # 검색 실패 시 컨텍스트를 비움
 
-        for faq_question, faq_answer in self.faq.items():
-            if faq_question.lower() in processed_query.lower():
-                logger.info(f"FAQ에서 일치하는 질문({faq_question}) 발견.")
-                return [faq_answer], "faq"
-
+        # Gemini를 이용한 답변 생성
         if self.use_gemini:
             try:
-                context_docs = self.collection.query(
-                    query_embeddings=self.embedding_model.encode([processed_query]).tolist(),
-                    n_results=n_results
-                )
-                context = "\n".join(context_docs['documents'][0]) if context_docs['documents'] else ""
-                
                 prompt = self.gemini_prompt_template.format(query=processed_query, context=context)
                 gemini_response = self.gemini_model.generate_content(prompt)
                 
-                if gemini_response and hasattr(gemini_response, 'text'):
+                if gemini_response and hasattr(gemini_response, 'text') and gemini_response.text:
                     logger.info(f"Gemini API 응답 성공. 쿼리: {processed_query[:50]}...")
                     return [gemini_response.text], "gemini"
                 else:
-                    logger.warning(f"Gemini API 응답이 유효하지 않습니다. 폴백 검색 시도. 응답: {gemini_response}")
+                    logger.warning(f"Gemini API 응답이 비어있거나 유효하지 않습니다. 응답: {gemini_response}")
             except Exception as e:
-                logger.error(f"Gemini API 호출 실패: {e}. 폴백 검색 시도.", exc_info=True)
+                logger.error(f"Gemini API 호출 실패: {e}", exc_info=True)
         
-        query_embedding = self.embedding_model.encode([processed_query])
-        results = self.collection.query(
-            query_embeddings=query_embedding.tolist(),
-            n_results=n_results
-        )
-        logger.info(f"ChromaDB 검색 완료. 쿼리: {processed_query[:50]}...")
-        return results['documents'][0] if results['documents'] else [], "chroma"
+        # Gemini 실패 시 또는 비활성화 시, ChromaDB 검색 결과만으로 응답
+        if context:
+            return [context], "chroma"
+        
+        return [], "not_found"
 
+    # *** 수정된 부분: 응답 생성 로직 단순화 ***
     def generate_response(self, query, relevant_data, response_type, user_id, channel_id):
         greeting = _get_session_greeting(self, user_id, channel_id)
         
-        response_text = ""
-        final_response_type = response_type
-
-        if response_type == "key_info":
-            response_text = relevant_data[0]
-            response = f"{greeting}{response_text}\n더 궁금한 점이 있으시면 말씀해주세요."
-        elif response_type == "faq":
-            response_text = relevant_data[0]
-            response = f"{greeting}{random.choice(self.responses['found'])}\n{response_text}\n더 궁금한 점이 있으시면 말씀해주세요. 💡"
-        elif response_type == "gemini":
+        if response_type == "gemini":
             response_text = relevant_data[0]
             response = f"{greeting}{response_text}"
-        else: # chroma
-            if not relevant_data:
-                final_response_type = "not_found"
-                response_text = random.choice(self.responses['not_found'])
-                response = f"{greeting}{response_text}\n피플팀 담당자에게 문의해보시는 걸 추천드립니다. 📞"
-            else:
-                context = "\n".join(relevant_data[:2])
-                response_text = f"{random.choice(self.responses['found'])}\n{context}"
-                response = f"{greeting}{response_text}\n더 궁금한 점이 있으시면 말씀해주세요. 💡"
+        elif response_type == "chroma": # Gemini 실패 시 폴백
+            context = relevant_data[0]
+            response = f"{greeting}✅ 관련 정보를 찾았습니다:\n{context}\n더 궁금한 점이 있으시면 말씀해주세요."
+        else: # not_found
+            response_text = random.choice(self.responses['not_found'])
+            response = f"{greeting}{response_text}\n피플팀 담당자에게 문의해보시는 건 어떨까요? 📞"
 
-        return f"{response}\n{random.choice(self.responses['signature'])}", final_response_type
+        return f"{response}\n{random.choice(self.responses['signature'])}", response_type
 
     def log_question(self, query, response_text, response_type):
         self.question_log.append({
@@ -340,10 +290,8 @@ class PeopleAIBot:
 bot = PeopleAIBot()
 
 # --- Slack 이벤트 핸들러 ---
-# *** 수정된 부분: 'searching' 메시지 전송 로직 추가 ***
 @app.message(".*")
 def handle_message(message, say):
-    """모든 메시지를 수신하여 봇을 호출해야 하는지 판별하고 응답합니다."""
     try:
         user_query = message['text']
         channel_id = message['channel']
@@ -365,7 +313,6 @@ def handle_message(message, say):
                 logger.info(f"너무 짧거나 빈 쿼리 무시됨. 쿼리: '{clean_query}'")
                 return
             
-            # 사용자에게 즉시 피드백을 주기 위해 '찾는 중' 메시지를 먼저 보냅니다.
             say(random.choice(bot.responses['searching']))
             
             relevant_data, response_type = bot.search_knowledge(clean_query)
@@ -490,3 +437,4 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 3000))
     logger.info(f"Flask 앱을 포트 {port}에서 실행합니다.")
     flask_app.run(host="0.0.0.0", port=port)
+�
