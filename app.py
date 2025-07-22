@@ -10,7 +10,6 @@ from datetime import datetime
 import json
 from googletrans import Translator
 import google.generativeai as genai
-# 구글 API 관련 라이브러리는 더 이상 필요 없으므로 삭제합니다.
 
 # --- 로깅 설정 ---
 logging.basicConfig(level=logging.INFO, filename="people_ai_bot.log",
@@ -76,13 +75,12 @@ class PeopleAIBot:
         self.setup_responses()
         self.setup_ocr_fixes()
         self.setup_faq()
+        self.setup_key_info() # *** 새로 추가된 부분 ***
         self.setup_events()
         
-        # --- 데이터 로딩 로직 변경 ---
-        # ChromaDB가 비어있을 때만 로컬 파일에서 데이터를 읽어옵니다.
         if self.collection.count() == 0:
             logger.info("ChromaDB 컬렉션이 비어있어 로컬 텍스트 파일 데이터를 로드합니다.")
-            text = self.load_local_text_data() # 새로 추가된 함수 호출
+            text = self.load_local_text_data()
             if text:
                 text_chunks = self.split_text_into_chunks(text)
                 if text_chunks:
@@ -102,14 +100,11 @@ class PeopleAIBot:
         self.question_log = []
         self.session_tracker = {}
 
-    # --- 새로 추가된 함수 ---
     def load_local_text_data(self, file_path="guide_data.txt"):
-        """로컬 텍스트 파일에서 가이드 내용을 불러옵니다."""
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 text = f.read()
             logger.info(f"로컬 파일 '{file_path}'에서 데이터를 성공적으로 로드했습니다.")
-            # 읽어온 텍스트에 대해서도 OCR 수정을 적용합니다.
             for wrong, correct in self.ocr_fixes.items():
                 text = text.replace(wrong, correct)
             return text
@@ -163,6 +158,15 @@ class PeopleAIBot:
         }
         logger.info("FAQ 설정 완료.")
 
+    # *** 새로 추가된 함수 ***
+    def setup_key_info(self):
+        """회사 주소, 와이파이 등 핵심 정보를 미리 설정합니다."""
+        self.key_info = {
+            "주소": "✅ 우리 회사 주소는 '서울특별시 강남구 테헤란로 415, L7 HOTELS 강남타워 4층'입니다.",
+            "와이파이": "✅ 직원용 와이파이는 'joonggonara-5G'이며, 비밀번호는 'jn2023!@'입니다.\n✅ 방문객용은 'joonggonara-guest-5G'이며, 비밀번호는 'guest2023!@'입니다."
+        }
+        logger.info("주요 정보(Key Info) 설정 완료.")
+
     def setup_events(self):
         self.events = [
             {"name": "분기별 타운홀 미팅", "date": "2025-09-15", "details": "👥 전 직원 참여, 오후 2시 대회의실 🏢"},
@@ -208,16 +212,26 @@ class PeopleAIBot:
             logger.error(f"언어 감지 또는 번역 실패: {e}", exc_info=True)
             return text
 
+    # *** 검색 순서가 변경된 함수 ***
     def search_knowledge(self, query, n_results=3):
+        """사용자 질문에 대한 정보를 Key Info, FAQ, Gemini, ChromaDB 순서로 검색합니다."""
         processed_query = self.detect_and_translate_language(query)
         for wrong, correct in self.ocr_fixes.items():
             processed_query = processed_query.replace(wrong, correct)
         
+        # 1. Key Info 검색 (가장 먼저 확인)
+        for keyword, answer in self.key_info.items():
+            if keyword in processed_query:
+                logger.info(f"주요 정보에서 일치하는 키워드({keyword}) 발견.")
+                return [answer], "key_info"
+
+        # 2. FAQ 검색
         for faq_question, faq_answer in self.faq.items():
             if faq_question.lower() in processed_query.lower():
                 logger.info(f"FAQ에서 일치하는 질문({faq_question}) 발견.")
                 return [faq_answer], "faq"
 
+        # 3. Gemini API를 이용한 검색 및 답변 생성
         if self.use_gemini:
             try:
                 context_docs = self.collection.query(
@@ -237,6 +251,7 @@ class PeopleAIBot:
             except Exception as e:
                 logger.error(f"Gemini API 호출 실패: {e}. 폴백 검색 시도.", exc_info=True)
         
+        # 4. ChromaDB 벡터 검색
         query_embedding = self.embedding_model.encode([processed_query])
         results = self.collection.query(
             query_embeddings=query_embedding.tolist(),
@@ -245,13 +260,17 @@ class PeopleAIBot:
         logger.info(f"ChromaDB 검색 완료. 쿼리: {processed_query[:50]}...")
         return results['documents'][0] if results['documents'] else [], "chroma"
 
+    # *** 응답 생성 로직이 수정된 함수 ***
     def generate_response(self, query, relevant_data, response_type, user_id, channel_id):
         greeting = _get_session_greeting(self, user_id, channel_id)
         
         response_text = ""
         final_response_type = response_type
 
-        if response_type == "faq":
+        if response_type == "key_info":
+            response_text = relevant_data[0]
+            response = f"{greeting}{response_text}\n더 궁금한 점이 있으시면 말씀해주세요."
+        elif response_type == "faq":
             response_text = relevant_data[0]
             response = f"{greeting}{random.choice(self.responses['found'])}\n{response_text}\n더 궁금한 점이 있으시면 말씀해주세요. 💡"
         elif response_type == "gemini":
