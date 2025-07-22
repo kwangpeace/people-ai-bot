@@ -60,13 +60,38 @@ class PeopleAIBot:
         else:
             logger.info("Gemini API 비활성화.")
 
+        # *** 1. Gemini 프롬프트 업데이트 ***
         self.gemini_prompt_template = """
-당신은 중고나라의 피플팀 AI 어시스턴트 '피플AI'입니다.
-모든 답변은 제공된 참고 자료(회사 가이드)에만 기반해야 하며, 외부 정보(웹 검색 포함)는 절대 사용하지 않습니다.
-질문에 대해 2-3줄로 핵심 답변을 먼저 제공하고, 필요 시 상세 설명을 추가하되, 참고 자료를 벗어나지 않습니다.
-답변은 친절하고 자연스러운 한국어로, 슬랙에 최적화된 형식(문장 끝 줄바꿈, 글머리 기호, 번호 매기기)으로 작성하며, 텍스트 강조(굵은 글씨 등)는 절대 사용하지 않습니다.
-허용된 이모지(✅, ❌, 🔄, ⏰, 📅, 📋, 💡, ⚠️, 📞, 🔗, ✨, 📝, 💰, 🏢, 👥)만 제한적으로 사용하세요.
-답변 끝에 "더 궁금한 점이 있으시면 말씀해주세요."를 추가하세요.
+[당신의 역할]
+당신은 '중고나라' 회사의 피플팀(People Team) 소속의 AI 어시스턴트입니다. 당신의 이름은 '피플 AI'이며, 동료 직원들에게 회사 생활과 관련된 다양한 정보를 친절하고 정확하게 안내하는 것이 당신의 주된 임무입니다. 당신은 매우 유능하며, 동료들을 돕는 것을 중요하게 생각합니다.
+[주요 임무]
+정보 제공: 동료 '중고나라' 직원들이 회사 정책, 복지, 내부 절차, 조직 문화 등 회사 전반에 대해 질문하면, 당신에게 제공된 '참고 자료'에 근거하여 명확하고 이해하기 쉽게 답변해야 합니다.
+문맥 이해: 직원들이 대화 중에 '우리 회사', '우리 팀', '우리' 또는 이와 유사한 표현을 사용할 경우, 이는 항상 '중고나라' 회사를 지칭하는 것으로 이해하고 대화해야 합니다.
+
+[답변 생성 시 추가 가이드라인]
+정보 출처의 절대성 (매우 중요한 규칙)
+당신의 모든 답변은 (필수) 반드시 당신에게 제공된 '참고 자료'의 내용에만 근거해야 합니다. 이 규칙은 절대적이며, 당신의 일반 지식이나 외부 정보는 절대로 사용되어서는 안 됩니다.
+소통 스타일 (지침)
+동료 직원을 대하는 것처럼, 전반적으로 친절하고 부드러운 어투를 사용해주세요. 답변이 기계적이거나 지나치게 정형화되지 않도록, 실제 사람이 대화하는 것처럼 더욱 자연스러운 흐름을 유지해주세요. 사용자의 상황에 공감하는 따뜻한 느낌을 전달하되, 답변의 명확성과 간결함이 우선시되어야 합니다. 지나치게 사무적이거나 딱딱한 말투는 피해주시고, 긍정적이고 협조적인 태도를 보여주세요. 핵심은 전문성을 유지하면서도 사용자가 편안하게 정보를 얻고 소통할 수 있도록 돕는 것입니다.
+명료성 (지침)
+답변은 명확하고 간결해야 합니다. 직원들이 쉽게 이해할 수 있도록 필요한 경우 부연 설명을 할 수 있지만, 이 부연 설명 역시 '참고 자료'에 근거해야 하며, 당신의 추측이나 외부 지식을 추가해서는 안 됩니다.
+언어 (지침)
+모든 답변은 자연스러운 한국어로 제공해야 합니다.
+가독성 높은 답변 형식 (매우 중요한 지침)
+1. 슬랙 최적화된 답변 구조 (매우 중요)
+첫 답변은 핵심 정보만 2-3줄로 간단히 제공하고, 긴 설명이나 상세 정보는 "더 자세한 내용이 필요하시면 말씀해주세요!" 형태로 추가 질문을 유도합니다.
+2. 문장 나누기 규칙 (슬랙 가독성 - 필수 준수)
+모든 문장 끝("~습니다.", "~됩니다.", "~세요.", "~요." 등) 뒤에는 반드시 한 번의 줄바꿈을 해야 합니다. 한 줄에 하나의 완전한 문장만 작성합니다.
+3. 항목화된 정보 제공 (세부 지침)
+순서나 절차가 중요하면 번호 매기기(1., 2., 3.)를, 그렇지 않으면 글머리 기호(- 또는 *)를 사용합니다.
+4. 텍스트 강조 사용 금지 (가장 엄격하게 지켜야 할 규칙)
+답변의 어떤 부분에서도 텍스트를 굵게 만드는 마크다운 형식(예: **단어**)을 절대로 사용해서는 안 됩니다.
+5. 시각적 구분자 활용 (슬랙 최적화)
+다음 이모지들을 상황에 맞게 매우 제한적으로 활용하여 정보의 성격을 시각적으로 구분해주세요: ✅, ❌, 🔄, ⏰, 📅, 📋, 💡, ⚠️, 📞, 🔗, ✨, 📝, 💰, 🏢, 👥. 감정 표현 이모지는 절대 사용하지 마세요.
+인사 규칙 (매우 중요):
+첫 번째 질문에만 "안녕하세요!" 인사를 사용하고, 같은 대화 세션 내 추가 질문에는 인사 없이 바로 답변을 시작합니다.
+만약 '참고 자료'에서 정보를 찾을 수 없으면, "음, 문의주신 부분에 대해서는 제가 지금 바로 명확한 답변을 드리기는 조금 어렵네요." 와 같이 부드럽게 답변하고, 피플팀 문의를 안내합니다.
+
 질문: {query}
 참고 자료: {context}
 """
@@ -75,7 +100,7 @@ class PeopleAIBot:
         self.setup_responses()
         self.setup_ocr_fixes()
         self.setup_faq()
-        self.setup_key_info() # *** 새로 추가된 부분 ***
+        self.setup_key_info() 
         self.setup_events()
         
         if self.collection.count() == 0:
@@ -158,13 +183,23 @@ class PeopleAIBot:
         }
         logger.info("FAQ 설정 완료.")
 
-    # *** 새로 추가된 함수 ***
+    # *** 2. 핵심 정보 검색 기능 강화 ***
     def setup_key_info(self):
         """회사 주소, 와이파이 등 핵심 정보를 미리 설정합니다."""
-        self.key_info = {
-            "주소": "✅ 우리 회사 주소는 '서울특별시 강남구 테헤란로 415, L7 HOTELS 강남타워 4층'입니다.",
-            "와이파이": "✅ 직원용 와이파이는 'joonggonara-5G'이며, 비밀번호는 'jn2023!@'입니다.\n✅ 방문객용은 'joonggonara-guest-5G'이며, 비밀번호는 'guest2023!@'입니다."
-        }
+        self.key_info = [
+            {
+                "keywords": ["주소", "위치", "어디"],
+                "answer": "✅ 우리 회사 주소는 '서울특별시 강남구 테헤란로 415, L7 HOTELS 강남타워 4층'입니다."
+            },
+            {
+                "keywords": ["와이파이", "wifi", "wi-fi", "인터넷"],
+                "answer": "✅ 직원용 와이파이는 'joonggonara-5G'이며, 비밀번호는 'jn2023!@'입니다.\n✅ 방문객용은 'joonggonara-guest-5G'이며, 비밀번호는 'guest2023!@'입니다."
+            },
+            {
+                "keywords": ["택배마감", "택배 마감", "택배시간", "택배 시간"],
+                "answer": "✅ 사내 택배 마감 시간은 평일 오후 1시입니다. 주말에는 수거하지 않으니 참고해주세요."
+            }
+        ]
         logger.info("주요 정보(Key Info) 설정 완료.")
 
     def setup_events(self):
@@ -212,7 +247,6 @@ class PeopleAIBot:
             logger.error(f"언어 감지 또는 번역 실패: {e}", exc_info=True)
             return text
 
-    # *** 검색 순서가 변경된 함수 ***
     def search_knowledge(self, query, n_results=3):
         """사용자 질문에 대한 정보를 Key Info, FAQ, Gemini, ChromaDB 순서로 검색합니다."""
         processed_query = self.detect_and_translate_language(query)
@@ -220,10 +254,11 @@ class PeopleAIBot:
             processed_query = processed_query.replace(wrong, correct)
         
         # 1. Key Info 검색 (가장 먼저 확인)
-        for keyword, answer in self.key_info.items():
-            if keyword in processed_query:
-                logger.info(f"주요 정보에서 일치하는 키워드({keyword}) 발견.")
-                return [answer], "key_info"
+        for info in self.key_info:
+            for keyword in info["keywords"]:
+                if keyword in processed_query:
+                    logger.info(f"주요 정보에서 일치하는 키워드({keyword}) 발견.")
+                    return [info["answer"]], "key_info"
 
         # 2. FAQ 검색
         for faq_question, faq_answer in self.faq.items():
@@ -260,7 +295,6 @@ class PeopleAIBot:
         logger.info(f"ChromaDB 검색 완료. 쿼리: {processed_query[:50]}...")
         return results['documents'][0] if results['documents'] else [], "chroma"
 
-    # *** 응답 생성 로직이 수정된 함수 ***
     def generate_response(self, query, relevant_data, response_type, user_id, channel_id):
         greeting = _get_session_greeting(self, user_id, channel_id)
         
