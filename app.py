@@ -161,10 +161,9 @@ class PeopleAIBot:
 
     def setup_responses(self):
         self.responses = {
-            "searching": ["가이드북을 찾아보는 중입니다. 🔍", "정보를 확인하고 있어요. 잠시만 기다려주세요. 🔄"],
             "found": ["찾았습니다! 가이드에 따르면 다음과 같아요. ✅", "궁금하신 내용은 이렇게 정리됩니다. 💡"],
             "not_found": ["음, 문의주신 부분은 제가 지금 명확히 답변드리기 어렵네요. ⚠️", "제가 아는 선에서는 해당 정보가 확인되지 않아요. ❌"],
-            "signature": ["- 중고나라 피플AI 드림 ✨", "- 당신의 회사생활 파트너, 피플AI 👥"]
+            "signature": ["- 중고나라 피플AI 드림 ✨"]
         }
         logger.info("응답 메시지 설정 완료.")
 
@@ -185,7 +184,7 @@ class PeopleAIBot:
 
     # *** 2. 핵심 정보 검색 기능 강화 ***
     def setup_key_info(self):
-        """회사 주소, 와이파이 등 핵심 정보를 미리 설정합니다."""
+        """회사 주소, 와이파이, 담당자 등 핵심 정보를 미리 설정합니다."""
         self.key_info = [
             {
                 "keywords": ["주소", "위치", "어디"],
@@ -198,6 +197,10 @@ class PeopleAIBot:
             {
                 "keywords": ["택배마감", "택배 마감", "택배시간", "택배 시간"],
                 "answer": "✅ 사내 택배 마감 시간은 평일 오후 1시입니다. 주말에는 수거하지 않으니 참고해주세요."
+            },
+            {
+                "keywords": ["근태 담당자", "근태담당자", "근태 문의"],
+                "answer": "✅ Flex 근태, 휴가 관련 문의는 피플팀 이성헌님께 하시면 됩니다."
             }
         ]
         logger.info("주요 정보(Key Info) 설정 완료.")
@@ -248,25 +251,21 @@ class PeopleAIBot:
             return text
 
     def search_knowledge(self, query, n_results=3):
-        """사용자 질문에 대한 정보를 Key Info, FAQ, Gemini, ChromaDB 순서로 검색합니다."""
         processed_query = self.detect_and_translate_language(query)
         for wrong, correct in self.ocr_fixes.items():
             processed_query = processed_query.replace(wrong, correct)
         
-        # 1. Key Info 검색 (가장 먼저 확인)
         for info in self.key_info:
             for keyword in info["keywords"]:
                 if keyword in processed_query:
                     logger.info(f"주요 정보에서 일치하는 키워드({keyword}) 발견.")
                     return [info["answer"]], "key_info"
 
-        # 2. FAQ 검색
         for faq_question, faq_answer in self.faq.items():
             if faq_question.lower() in processed_query.lower():
                 logger.info(f"FAQ에서 일치하는 질문({faq_question}) 발견.")
                 return [faq_answer], "faq"
 
-        # 3. Gemini API를 이용한 검색 및 답변 생성
         if self.use_gemini:
             try:
                 context_docs = self.collection.query(
@@ -286,7 +285,6 @@ class PeopleAIBot:
             except Exception as e:
                 logger.error(f"Gemini API 호출 실패: {e}. 폴백 검색 시도.", exc_info=True)
         
-        # 4. ChromaDB 벡터 검색
         query_embedding = self.embedding_model.encode([processed_query])
         results = self.collection.query(
             query_embeddings=query_embedding.tolist(),
@@ -359,7 +357,6 @@ def handle_message(message, say):
                 logger.info(f"너무 짧거나 빈 쿼리 무시됨. 쿼리: '{clean_query}'")
                 return
             
-            say(random.choice(bot.responses['searching']))
             relevant_data, response_type = bot.search_knowledge(clean_query)
             response, final_response_type = bot.generate_response(clean_query, relevant_data, response_type, user_id, channel_id)
             say(response)
