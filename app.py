@@ -88,7 +88,6 @@ class PeopleAIBot:
         self.setup_key_info()
         self.setup_events()
         
-        # ChromaDB 초기화 및 데이터 로딩
         if self.collection.count() == 0:
             logger.info("ChromaDB 컬렉션이 비어있어 로컬 텍스트 파일 데이터를 로드합니다.")
             text = self.load_local_text_data()
@@ -167,30 +166,32 @@ class PeopleAIBot:
     def setup_key_info(self):
         """AI가 놓치기 쉬운 핵심 정보를 키워드 기반으로 설정합니다."""
         self.key_info = [
-            {
-                "keywords": ["주소", "위치", "어디"],
-                "answer": "✅ 우리 회사 주소는 '서울특별시 강남구 테헤란로 415, L7 HOTELS 강남타워 4층'입니다."
-            },
-            {
-                "keywords": ["와이파이", "wifi", "wi-fi", "인터넷"],
-                "answer": "✅ 직원용 와이파이는 'joonggonara-5G'이며, 비밀번호는 'jn2023!@'입니다.\n✅ 방문객용은 'joonggonara-guest-5G'이며, 비밀번호는 'guest2023!@'입니다."
-            },
-            {
-                "keywords": ["택배마감", "택배 마감", "택배시간", "택배 시간"],
-                "answer": "✅ 사내 택배 마감 시간은 평일 오후 1시입니다. 주말에는 수거하지 않으니 참고해주세요."
-            },
-            {
-                "keywords": ["근태 담당자", "근태담당자", "근태 문의"],
-                "answer": "✅ Flex 근태, 휴가 관련 문의는 피플팀 이성헌님께 하시면 됩니다."
-            },
-            {
-                "keywords": ["맛집", "밥집", "점심", "저녁"],
-                "answer": "✅ 중고나라 본사 근처 맛집 정보는 가이드 문서에 정리되어 있어요. '주변 맛집 리스트'라고 물어보시면 더 자세히 알려드릴게요!"
-            },
-            {
-                "keywords": ["웹사이트", "홈페이지", "블로그"],
-                "answer": "✅ 중고나라 공식 웹사이트 주소는 다음과 같습니다:\n- 중고나라 서비스: https://www.joongna.com/\n- 중고나라 기술 블로그: https://teamblog.joonggonara.co.kr/"
-            }
+            # 기본 정보
+            {"keywords": ["주소", "위치", "어디"], "answer": "✅ 우리 회사 주소는 '서울특별시 강남구 테헤란로 415, L7 HOTELS 강남타워 4층'입니다."},
+            {"keywords": ["와이파이", "wifi", "wi-fi", "인터넷"], "answer": "✅ 직원용 와이파이는 'joonggonara-5G'이며, 비밀번호는 'jn2023!@'입니다.\n✅ 방문객용은 'joonggonara-guest-5G'이며, 비밀번호는 'guest2023!@'입니다."},
+            {"keywords": ["택배마감", "택배 마감", "택배시간", "택배 시간"], "answer": "✅ 사내 택배 마감 시간은 평일 오후 1시입니다. 주말에는 수거하지 않으니 참고해주세요."},
+            {"keywords": ["웹사이트", "홈페이지", "블로그"], "answer": "✅ 중고나라 공식 웹사이트 주소는 다음과 같습니다:\n- 중고나라 서비스: https://www.joongna.com/\n- 중고나라 기술 블로그: https://teamblog.joonggonara.co.kr/"},
+            {"keywords": ["월급", "급여일"], "answer": "💰 급여일은 매월 말일입니다."},
+
+            # 휴가 관련
+            {"keywords": ["연차", "휴가"], "answer": "✅ 연차휴가는 근속기간 기준으로 지급되며, 1시간 단위로도 사용할 수 있습니다.\n✨ 매월 0.5일의 특별 반차 '유즈해피'도 제공돼요! 더 자세한 휴가 종류(리프레시, 경조사 등)가 궁금하시면 구체적으로 질문해주세요."},
+            {"keywords": ["리프레시", "근속"], "answer": "✨ 매년 입사기념일을 맞이하면 근속 연차에 따라 2일에서 최대 10일까지의 리프레시 휴가와 선물이 지급됩니다!"},
+            {"keywords": ["유즈해피", "usehappy"], "answer": "✨ 매월 0.5일(4시간)의 특별 반차 휴가 '유즈해피'가 제공됩니다. 해당 월에 사용하지 않으면 소멸되니 잊지 말고 사용하세요!"},
+
+            # 담당자 및 문의
+            {"keywords": ["피플팀 담당자", "담당자", "문의"], "answer": "📞 피플팀 문의 채널(#문의-피플팀)을 이용하시거나, 아래 담당자에게 직접 문의하실 수 있습니다:\n- 근태/휴가: 이성헌님\n- 계약/규정: 박지영님\n- 평가: 김광수님\n- 채용: 이성헌님\n- 계정(구글/슬랙): 박지영님\n- 장비/소프트웨어: 시현빈님\n- 급여/4대보험: 이동훈님, 박지영님"},
+            {"keywords": ["근태 담당자", "근태담당자", "근태 문의", "근무기록", "출퇴근 수정", "출근 체크"], "answer": "✅ Flex 근태, 휴가, 근무기록 수정 관련 문의는 피플팀 이성헌님께 하시면 됩니다."},
+
+            # 복지 및 비용
+            {"keywords": ["법인카드", "식대", "제로페이"], "answer": "✅ 점심식대는 개인 법인카드로 월 25만원, 야근 시 저녁식대는 제로페이로 1만원이 지원됩니다. 팀 운영비나 업무 교통비에 대해서도 궁금하시면 더 물어보세요!"},
+            {"keywords": ["건강검진", "검진"], "answer": "✅ 매년 1회 KMI 한국의학연구소에서 종합 건강검진을 지원하고 있습니다. 자세한 예약 방법이나 대상자 확인이 필요하시면 말씀해주세요."},
+            {"keywords": ["도서", "책 신청", "다독다독"], "answer": "📚 '다독다독' 도서 지원 제도를 통해 매월 1인당 1권의 도서 구매를 지원합니다. 지정된 신청서 링크를 통해 신청해주세요."},
+            {"keywords": ["교육", "강의", "지식당"], "answer": "🎓 '지식당' 프로그램을 통해 자격증 응시료, 온라인/오프라인 교육 등을 지원하고 있습니다. 자세한 내용이 궁금하시면 '교육 지원'에 대해 물어보세요."},
+            {"keywords": ["추천", "보상금", "인재추천"], "answer": "💰 사내 인재 추천 제도를 통해 인재를 추천하고, 해당 인재가 입사하면 추천자와 입사자 모두에게 보상금이 지급됩니다. 직군과 레벨에 따라 금액이 달라져요!"},
+
+            # 업무 및 장비
+            {"keywords": ["재택", "재택근무"], "answer": "✅ 재택근무는 매주 수요일에 운영되며, 코어타임(10시~17시)은 동일하게 적용됩니다."},
+            {"keywords": ["장비", "고장", "교체", "노트북", "맥북", "모니터"], "answer": "💻 업무용 PC는 3년 주기로 교체되며, 장비 고장이나 기타 문의는 피플팀 시현빈님께 하시면 됩니다."}
         ]
         logger.info("주요 정보(Key Info) 설정 완료.")
 
@@ -202,7 +203,6 @@ class PeopleAIBot:
         logger.info("이벤트 설정 완료.")
 
     def split_text_into_chunks(self, text, max_length=1000, overlap=100):
-        """의미 단위(문단)를 유지하며 텍스트를 청크로 나눕니다."""
         paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
         
         chunks = []
@@ -240,19 +240,16 @@ class PeopleAIBot:
             return text
 
     def search_knowledge(self, query, n_results=5):
-        """사용자 질문에 대해 키워드 검색 후, AI 검색을 수행합니다."""
         processed_query = self.detect_and_translate_language(query)
         for wrong, correct in self.ocr_fixes.items():
             processed_query = processed_query.replace(wrong, correct)
         
-        # 1. Key Info (키워드) 검색
         for info in self.key_info:
             for keyword in info["keywords"]:
                 if keyword in processed_query:
                     logger.info(f"주요 정보에서 일치하는 키워드({keyword}) 발견.")
                     return [info["answer"]], "key_info"
 
-        # 2. RAG (ChromaDB + Gemini)
         try:
             context_docs = self.collection.query(
                 query_embeddings=self.embedding_model.encode([processed_query]).tolist(),
