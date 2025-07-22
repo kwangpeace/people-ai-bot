@@ -60,7 +60,6 @@ class PeopleAIBot:
         else:
             logger.info("Gemini API 비활성화.")
 
-        # *** 1. Gemini 프롬프트 업데이트 ***
         self.gemini_prompt_template = """
 [당신의 역할]
 당신은 '중고나라' 회사의 피플팀(People Team) 소속의 AI 어시스턴트입니다. 당신의 이름은 '피플 AI'이며, 동료 직원들에게 회사 생활과 관련된 다양한 정보를 친절하고 정확하게 안내하는 것이 당신의 주된 임무입니다. 당신은 매우 유능하며, 동료들을 돕는 것을 중요하게 생각합니다.
@@ -159,8 +158,16 @@ class PeopleAIBot:
         }
         logger.info("성격 설정 완료.")
 
+    # *** 수정된 부분: 'searching' 메시지 추가 ***
     def setup_responses(self):
+        """상황별 기본 응답 메시지를 설정합니다."""
         self.responses = {
+            "searching": [
+                "생각하는 중입니다... 🤔",
+                "잠시만 기다려주세요. 피플AI가 열심히 답을 찾고 있어요! 🏃‍♂️",
+                "데이터를 분석하고 있어요. 곧 답변해 드릴게요! 📊",
+                "가이드북을 샅샅이 뒤지는 중... 📚"
+            ],
             "found": ["찾았습니다! 가이드에 따르면 다음과 같아요. ✅", "궁금하신 내용은 이렇게 정리됩니다. 💡"],
             "not_found": ["음, 문의주신 부분은 제가 지금 명확히 답변드리기 어렵네요. ⚠️", "제가 아는 선에서는 해당 정보가 확인되지 않아요. ❌"],
             "signature": ["- 중고나라 피플AI 드림 ✨"]
@@ -182,7 +189,6 @@ class PeopleAIBot:
         }
         logger.info("FAQ 설정 완료.")
 
-    # *** 2. 핵심 정보 검색 기능 강화 ***
     def setup_key_info(self):
         """회사 주소, 와이파이, 담당자 등 핵심 정보를 미리 설정합니다."""
         self.key_info = [
@@ -334,8 +340,10 @@ class PeopleAIBot:
 bot = PeopleAIBot()
 
 # --- Slack 이벤트 핸들러 ---
+# *** 수정된 부분: 'searching' 메시지 전송 로직 추가 ***
 @app.message(".*")
 def handle_message(message, say):
+    """모든 메시지를 수신하여 봇을 호출해야 하는지 판별하고 응답합니다."""
     try:
         user_query = message['text']
         channel_id = message['channel']
@@ -356,6 +364,9 @@ def handle_message(message, say):
             if not clean_query or len(clean_query) < 2:
                 logger.info(f"너무 짧거나 빈 쿼리 무시됨. 쿼리: '{clean_query}'")
                 return
+            
+            # 사용자에게 즉시 피드백을 주기 위해 '찾는 중' 메시지를 먼저 보냅니다.
+            say(random.choice(bot.responses['searching']))
             
             relevant_data, response_type = bot.search_knowledge(clean_query)
             response, final_response_type = bot.generate_response(clean_query, relevant_data, response_type, user_id, channel_id)
