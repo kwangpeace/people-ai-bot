@@ -1,3 +1,5 @@
+torch
+torchvision
 slack-bolt==1.18.0
 chromadb==0.4.15
 sentence-transformers==2.2.2
