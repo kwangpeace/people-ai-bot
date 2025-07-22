@@ -101,11 +101,11 @@ class PeopleAIBot:
         self.setup_events()
         
         # ChromaDB 초기화 및 데이터 로딩
+        # *** 중요: DB를 새로 만들려면 서버에서 chroma_db 폴더를 삭제해야 합니다. ***
         if self.collection.count() == 0:
             logger.info("ChromaDB 컬렉션이 비어있어 로컬 텍스트 파일 데이터를 로드합니다.")
             text = self.load_local_text_data()
             if text:
-                # *** 수정된 부분: 데이터 분할 로직 개선 ***
                 text_chunks = self.split_text_into_chunks(text)
                 if text_chunks:
                     embeddings = self.embedding_model.encode(text_chunks)
@@ -239,6 +239,7 @@ class PeopleAIBot:
                 query_embeddings=self.embedding_model.encode([processed_query]).tolist(),
                 n_results=n_results
             )
+            # 검색된 여러 조각을 하나의 큰 참고 자료로 합칩니다.
             context = "\n\n".join(context_docs['documents'][0]) if context_docs and context_docs['documents'] else ""
             logger.info(f"ChromaDB 검색 완료. 쿼리: {processed_query[:50]}... {n_results}개 결과 사용.")
         except Exception as e:
@@ -378,7 +379,7 @@ def daily_tip(message, say):
     tips = [
         "💡 이메일 제목은 명확히 작성하세요.\n예시: '회의' 대신 '3/15 마케팅 회의'로!",
         "⏰ 회의 5분 전 입장하면 인상 좋아요.",
-        "� 사내 식당 무료 뷔페를 꼭 이용하세요. 점심 식비 절약에 최고! 😋"
+        "💰 사내 식당 무료 뷔페를 꼭 이용하세요. 점심 식비 절약에 최고! 😋"
     ]
     
     tip = random.choice(tips)
