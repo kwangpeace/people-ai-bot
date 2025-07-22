@@ -161,7 +161,7 @@ class PeopleAIBot:
             "searching": [
                 "생각하는 중입니다... 🤔",
                 "잠시만 기다려주세요. 피플AI가 열심히 답을 찾고 있어요! 🏃‍♂️",
-                "데이터를 분석하고 있어요. 곧 답변해 드릴게요! �",
+                "데이터를 분석하고 있어요. 곧 답변해 드릴게요! 📊",
                 "가이드북을 샅샅이 뒤지는 중... 📚"
             ],
             "not_found": ["음, 문의주신 부분은 제가 지금 명확히 답변드리기 어렵네요. ⚠️", "제가 아는 선에서는 해당 정보가 확인되지 않아요. ❌"],
@@ -221,14 +221,12 @@ class PeopleAIBot:
             logger.error(f"언어 감지 또는 번역 실패: {e}", exc_info=True)
             return text
 
-    # *** 수정된 부분: 키워드 검색 로직 제거 ***
     def search_knowledge(self, query, n_results=3):
         """사용자 질문에 대해 ChromaDB와 Gemini를 사용해 답변을 검색하고 생성합니다."""
         processed_query = self.detect_and_translate_language(query)
         for wrong, correct in self.ocr_fixes.items():
             processed_query = processed_query.replace(wrong, correct)
         
-        # ChromaDB에서 관련 문서 검색
         try:
             context_docs = self.collection.query(
                 query_embeddings=self.embedding_model.encode([processed_query]).tolist(),
@@ -238,9 +236,8 @@ class PeopleAIBot:
             logger.info(f"ChromaDB 검색 완료. 쿼리: {processed_query[:50]}...")
         except Exception as e:
             logger.error(f"ChromaDB 검색 실패: {e}", exc_info=True)
-            context = "" # 검색 실패 시 컨텍스트를 비움
+            context = ""
 
-        # Gemini를 이용한 답변 생성
         if self.use_gemini:
             try:
                 prompt = self.gemini_prompt_template.format(query=processed_query, context=context)
@@ -254,23 +251,21 @@ class PeopleAIBot:
             except Exception as e:
                 logger.error(f"Gemini API 호출 실패: {e}", exc_info=True)
         
-        # Gemini 실패 시 또는 비활성화 시, ChromaDB 검색 결과만으로 응답
         if context:
             return [context], "chroma"
         
         return [], "not_found"
 
-    # *** 수정된 부분: 응답 생성 로직 단순화 ***
     def generate_response(self, query, relevant_data, response_type, user_id, channel_id):
         greeting = _get_session_greeting(self, user_id, channel_id)
         
         if response_type == "gemini":
             response_text = relevant_data[0]
             response = f"{greeting}{response_text}"
-        elif response_type == "chroma": # Gemini 실패 시 폴백
+        elif response_type == "chroma":
             context = relevant_data[0]
             response = f"{greeting}✅ 관련 정보를 찾았습니다:\n{context}\n더 궁금한 점이 있으시면 말씀해주세요."
-        else: # not_found
+        else:
             response_text = random.choice(self.responses['not_found'])
             response = f"{greeting}{response_text}\n피플팀 담당자에게 문의해보시는 건 어떨까요? 📞"
 
@@ -437,4 +432,3 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 3000))
     logger.info(f"Flask 앱을 포트 {port}에서 실행합니다.")
     flask_app.run(host="0.0.0.0", port=port)
-�
