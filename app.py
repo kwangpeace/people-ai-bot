@@ -60,7 +60,6 @@ class PeopleAIBot:
         else:
             logger.info("Gemini API 비활성화.")
 
-        # *** 수정된 부분: 프롬프트 최적화 ***
         self.gemini_prompt_template = """
 당신은 '중고나라'의 친절한 AI 동료 '피플AI'입니다. 당신의 임무는 제공된 '참고 자료'만을 사용하여 동료의 질문에 답변하는 것입니다.
 
@@ -86,6 +85,7 @@ class PeopleAIBot:
         self.setup_personalities()
         self.setup_responses()
         self.setup_ocr_fixes()
+        self.setup_key_info()
         self.setup_events()
         
         # ChromaDB 초기화 및 데이터 로딩
@@ -163,6 +163,36 @@ class PeopleAIBot:
             "택배실": "택배실", "결제": "결재", "급여명세서": "급여명세서"
         }
         logger.info("OCR 수정 맵 설정 완료.")
+    
+    def setup_key_info(self):
+        """AI가 놓치기 쉬운 핵심 정보를 키워드 기반으로 설정합니다."""
+        self.key_info = [
+            {
+                "keywords": ["주소", "위치", "어디"],
+                "answer": "✅ 우리 회사 주소는 '서울특별시 강남구 테헤란로 415, L7 HOTELS 강남타워 4층'입니다."
+            },
+            {
+                "keywords": ["와이파이", "wifi", "wi-fi", "인터넷"],
+                "answer": "✅ 직원용 와이파이는 'joonggonara-5G'이며, 비밀번호는 'jn2023!@'입니다.\n✅ 방문객용은 'joonggonara-guest-5G'이며, 비밀번호는 'guest2023!@'입니다."
+            },
+            {
+                "keywords": ["택배마감", "택배 마감", "택배시간", "택배 시간"],
+                "answer": "✅ 사내 택배 마감 시간은 평일 오후 1시입니다. 주말에는 수거하지 않으니 참고해주세요."
+            },
+            {
+                "keywords": ["근태 담당자", "근태담당자", "근태 문의"],
+                "answer": "✅ Flex 근태, 휴가 관련 문의는 피플팀 이성헌님께 하시면 됩니다."
+            },
+            {
+                "keywords": ["맛집", "밥집", "점심", "저녁"],
+                "answer": "✅ 중고나라 본사 근처 맛집 정보는 가이드 문서에 정리되어 있어요. '주변 맛집 리스트'라고 물어보시면 더 자세히 알려드릴게요!"
+            },
+            {
+                "keywords": ["웹사이트", "홈페이지", "블로그"],
+                "answer": "✅ 중고나라 공식 웹사이트 주소는 다음과 같습니다:\n- 중고나라 서비스: https://www.joongna.com/\n- 중고나라 기술 블로그: https://teamblog.joonggonara.co.kr/"
+            }
+        ]
+        logger.info("주요 정보(Key Info) 설정 완료.")
 
     def setup_events(self):
         self.events = [
@@ -210,11 +240,19 @@ class PeopleAIBot:
             return text
 
     def search_knowledge(self, query, n_results=5):
-        """사용자 질문에 대해 ChromaDB와 Gemini를 사용해 답변을 검색하고 생성합니다."""
+        """사용자 질문에 대해 키워드 검색 후, AI 검색을 수행합니다."""
         processed_query = self.detect_and_translate_language(query)
         for wrong, correct in self.ocr_fixes.items():
             processed_query = processed_query.replace(wrong, correct)
         
+        # 1. Key Info (키워드) 검색
+        for info in self.key_info:
+            for keyword in info["keywords"]:
+                if keyword in processed_query:
+                    logger.info(f"주요 정보에서 일치하는 키워드({keyword}) 발견.")
+                    return [info["answer"]], "key_info"
+
+        # 2. RAG (ChromaDB + Gemini)
         try:
             context_docs = self.collection.query(
                 query_embeddings=self.embedding_model.encode([processed_query]).tolist(),
@@ -239,16 +277,18 @@ class PeopleAIBot:
             except Exception as e:
                 logger.error(f"Gemini API 호출 실패: {e}", exc_info=True)
         
-        return [], "not_found" # Gemini가 실패하거나 컨텍스트가 없으면 '못 찾음'으로 처리
+        return [], "not_found"
 
-    # *** 수정된 부분: 서명 제거 및 응답 로직 안정화 ***
     def generate_response(self, query, relevant_data, response_type, user_id, channel_id):
         greeting = _get_session_greeting(self, user_id, channel_id)
         
-        if response_type == "gemini":
+        if response_type == "key_info":
             response_text = relevant_data[0]
             response = f"{greeting}{response_text}"
-        else: # not_found 또는 Gemini 실패 시
+        elif response_type == "gemini":
+            response_text = relevant_data[0]
+            response = f"{greeting}{response_text}"
+        else: # not_found
             response_text = random.choice(self.responses['not_found'])
             response = f"{greeting}{response_text}\n피플팀 담당자에게 문의해보시는 건 어떨까요? 📞"
 
@@ -370,7 +410,7 @@ def recommend_restaurant(message, say):
 
     restaurants = [
         "🍜 라멘집: 돈코츠 라멘 맛집 (도보 5분)",
-        "� 피자스쿨: 점심 특가 피자 (도보 3분)",
+        "🍕 피자스쿨: 점심 특가 피자 (도보 3분)",
         "🍱 한솥도시락: 간편한 도시락 (도보 2분)",
         "☕ 스타벅스: 회의하기 좋은 카페 (도보 1분)"
     ]
