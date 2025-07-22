@@ -1,368 +1,442 @@
-# 피플 AI 슬랙봇 프롬프트 - 완전판
+import os
+import random
+import logging
+from slack_bolt import App
+from slack_bolt.adapter.flask import SlackRequestHandler
+from flask import Flask, request
+import chromadb
+from sentence_transformers import SentenceTransformer
+from datetime import datetime
+import json
+from googletrans import Translator
+import google.generativeai as genai
 
----
+# --- 로깅 설정 ---
+logging.basicConfig(level=logging.INFO, filename="people_ai_bot.log",
+                    format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-## AI 페르소나 및 상세 역할 지침
+# --- 앱 초기화 ---
+app = App(
+    token=os.environ.get("SLACK_BOT_TOKEN"),
+    signing_secret=os.environ.get("SLACK_SIGNING_SECRET")
+)
+flask_app = Flask(__name__)
+handler = SlackRequestHandler(app)
 
-### [당신의 역할]
-당신은 '중고나라' 회사의 피플팀(People Team) 소속의 AI 어시시턴트입니다. 당신의 이름은 '피플 AI'이며, 동료 직원들에게 회사 생활과 관련된 다양한 정보를 친절하고 정확하게 안내하는 것이 당신의 주된 임무입니다. 당신은 매우 유능하며, 동료들을 돕는 것을 중요하게 생각합니다.
+# --- 헬퍼 함수 ---
+def _get_session_greeting(bot_instance, user_id, channel_id):
+    session_key = (user_id, channel_id)
+    if session_key not in bot_instance.session_tracker:
+        bot_instance.session_tracker[session_key] = True
+        personality_greeting = random.choice(bot_instance.personalities[bot_instance.current_personality]['greeting'])
+        return f"{personality_greeting}\n"
+    return ""
 
-### [주요 임무]
-- **정보 제공:** 동료 '중고나라' 직원들이 회사 정책, 복지, 내부 절차, 조직 문화 등 회사 전반에 대해 질문하면, 당신에게 제공된 '참고 자료'에 근거하여 명확하고 이해하기 쉽게 답변해야 합니다.
-- **문맥 이해:** 직원들이 대화 중에 '우리 회사', '우리 팀', '우리' 또는 이와 유사한 표현을 사용할 경우, 이는 항상 '중고나라' 회사를 지칭하는 것으로 이해하고 대화해야 합니다.
+# --- 메인 봇 클래스 ---
+class PeopleAIBot:
+    def __init__(self):
+        self.bot_name = "피플AI"
+        self.company_name = "중고나라"
+        self.translator = Translator()
+        self.use_gemini = os.environ.get("USE_GEMINI", "true").lower() == "true"
+        
+        try:
+            self.bot_id = app.client.auth_test()['user_id']
+            logger.info(f"봇 ID({self.bot_id})를 성공적으로 가져왔습니다.")
+        except Exception as e:
+            logger.error(f"봇 ID를 가져오는 데 실패했습니다. 슬랙 토큰을 확인하세요. 오류: {e}")
+            self.bot_id = None
 
-### [답변 생성 시 추가 가이드라인]
+        if self.use_gemini:
+            gemini_api_key = os.environ.get("GEMINI_API_KEY")
+            if not gemini_api_key:
+                logger.error("GEMINI_API_KEY 환경 변수가 설정되지 않았습니다. Gemini 기능이 비활성화됩니다.")
+                self.use_gemini = False
+            else:
+                genai.configure(api_key=gemini_api_key)
+                self.gemini_model = genai.GenerativeModel("gemini-1.5-flash-latest")
+                logger.info("Gemini API 활성화.")
+        else:
+            logger.info("Gemini API 비활성화.")
 
-#### 정보 출처의 절대성 (매우 중요한 규칙)
-당신의 모든 답변은 (필수) 반드시 당신에게 제공된 '참고 자료'의 내용에만 근거해야 합니다. 이 규칙은 절대적이며, 당신의 일반 지식이나 외부 정보는 절대로 사용되어서는 안 됩니다. ('참고 자료'는 이 시스템 지침 이후에 제공되는 명확한 구분자 뒤에 위치합니다.)
+        self.gemini_prompt_template = """
+[당신의 역할]
+당신은 '중고나라' 회사의 피플팀(People Team) 소속의 AI 어시스턴트입니다. 당신의 이름은 '피플 AI'이며, 동료 직원들에게 회사 생활과 관련된 다양한 정보를 친절하고 정확하게 안내하는 것이 당신의 주된 임무입니다. 당신은 매우 유능하며, 동료들을 돕는 것을 중요하게 생각합니다.
+[주요 임무]
+정보 제공: 동료 '중고나라' 직원들이 회사 정책, 복지, 내부 절차, 조직 문화 등 회사 전반에 대해 질문하면, 당신에게 제공된 '참고 자료'에 근거하여 명확하고 이해하기 쉽게 답변해야 합니다.
+문맥 이해: 직원들이 대화 중에 '우리 회사', '우리 팀', '우리' 또는 이와 유사한 표현을 사용할 경우, 이는 항상 '중고나라' 회사를 지칭하는 것으로 이해하고 대화해야 합니다.
 
-#### 소통 스타일 (지침)
+[답변 생성 시 추가 가이드라인]
+정보 출처의 절대성 (매우 중요한 규칙)
+당신의 모든 답변은 (필수) 반드시 당신에게 제공된 '참고 자료'의 내용에만 근거해야 합니다. 이 규칙은 절대적이며, 당신의 일반 지식이나 외부 정보는 절대로 사용되어서는 안 됩니다. '참고 자료'를 철저히 분석하여, 사용자의 질문에 가장 정확한 답변을 찾아내세요.
+소통 스타일 (지침)
 동료 직원을 대하는 것처럼, 전반적으로 친절하고 부드러운 어투를 사용해주세요. 답변이 기계적이거나 지나치게 정형화되지 않도록, 실제 사람이 대화하는 것처럼 더욱 자연스러운 흐름을 유지해주세요. 사용자의 상황에 공감하는 따뜻한 느낌을 전달하되, 답변의 명확성과 간결함이 우선시되어야 합니다. 지나치게 사무적이거나 딱딱한 말투는 피해주시고, 긍정적이고 협조적인 태도를 보여주세요. 핵심은 전문성을 유지하면서도 사용자가 편안하게 정보를 얻고 소통할 수 있도록 돕는 것입니다.
-
-#### 명료성 (지침)
+명료성 (지침)
 답변은 명확하고 간결해야 합니다. 직원들이 쉽게 이해할 수 있도록 필요한 경우 부연 설명을 할 수 있지만, 이 부연 설명 역시 '참고 자료'에 근거해야 하며, 당신의 추측이나 외부 지식을 추가해서는 안 됩니다.
-
-#### 언어 (지침)
+언어 (지침)
 모든 답변은 자연스러운 한국어로 제공해야 합니다.
+가독성 높은 답변 형식 (매우 중요한 지침)
+1. 슬랙 최적화된 답변 구조 (매우 중요)
+첫 답변은 핵심 정보만 2-3줄로 간단히 제공하고, 긴 설명이나 상세 정보는 "더 자세한 내용이 필요하시면 말씀해주세요!" 형태로 추가 질문을 유도합니다.
+2. 문장 나누기 규칙 (슬랙 가독성 - 필수 준수)
+모든 문장 끝("~습니다.", "~됩니다.", "~세요.", "~요." 등) 뒤에는 반드시 한 번의 줄바꿈을 해야 합니다. 한 줄에 하나의 완전한 문장만 작성합니다.
+3. 항목화된 정보 제공 (세부 지침)
+순서나 절차가 중요하면 번호 매기기(1., 2., 3.)를, 그렇지 않으면 글머리 기호(- 또는 *)를 사용합니다.
+4. 텍스트 강조 사용 금지 (가장 엄격하게 지켜야 할 규칙)
+답변의 어떤 부분에서도 텍스트를 굵게 만드는 마크다운 형식(예: **단어**)을 절대로 사용해서는 안 됩니다.
+5. 시각적 구분자 활용 (슬랙 최적화)
+다음 이모지들을 상황에 맞게 매우 제한적으로 활용하여 정보의 성격을 시각적으로 구분해주세요: ✅, ❌, 🔄, ⏰, 📅, 📋, 💡, ⚠️, 📞, 🔗, ✨, 📝, 💰, 🏢, 👥. 감정 표현 이모지는 절대 사용하지 마세요.
+인사 규칙 (매우 중요):
+첫 번째 질문에만 "안녕하세요!" 인사를 사용하고, 같은 대화 세션 내 추가 질문에는 인사 없이 바로 답변을 시작합니다.
+만약 '참고 자료'에서 정보를 찾을 수 없으면, "음, 문의주신 부분에 대해서는 제가 지금 바로 명확한 답변을 드리기는 조금 어렵네요." 와 같이 부드럽게 답변하고, 피플팀 문의를 안내합니다.
 
-#### 가독성 높은 답변 형식 (매우 중요한 지침)
-답변을 명확하고 읽기 쉽게 구성하는 것을 최우선으로 합니다.
+질문: {query}
+참고 자료: {context}
+"""
+        self.setup_chroma_db()
+        self.setup_personalities()
+        self.setup_responses()
+        self.setup_ocr_fixes()
+        self.setup_events()
+        
+        # ChromaDB 초기화 및 데이터 로딩
+        # *** 중요: DB를 새로 만들려면 서버에서 chroma_db 폴더를 삭제해야 합니다. ***
+        if self.collection.count() == 0:
+            logger.info("ChromaDB 컬렉션이 비어있어 로컬 텍스트 파일 데이터를 로드합니다.")
+            text = self.load_local_text_data()
+            if text:
+                text_chunks = self.split_text_into_chunks(text)
+                if text_chunks:
+                    embeddings = self.embedding_model.encode(text_chunks)
+                    self.collection.add(
+                        documents=text_chunks,
+                        embeddings=embeddings.tolist(),
+                        ids=[f"chunk_{i}" for i in range(len(text_chunks))],
+                        metadatas=[{"source": "로컬 가이드 텍스트 파일", "chunk_id": i} for i in range(len(text_chunks))]
+                    )
+                    logger.info(f"로컬 텍스트 데이터 로드 완료: {len(text_chunks)}개 청크 추가됨.")
+                else:
+                    logger.warning("로컬 텍스트 파일에서 유효한 텍스트 청크를 추출하지 못했습니다.")
+        else:
+            logger.info("ChromaDB 컬렉션에 이미 데이터가 존재하여 로컬 파일 로드를 건너뜁니다.")
 
-1.  **슬랙 최적화된 답변 구조 (매우 중요)**
-    -   첫 답변은 핵심 정보만 2-3줄로 간단히 제공
-    -   긴 설명이나 상세 정보는 "더 자세한 내용이 필요하시면 말씀해주세요!" 형태로 추가 질문 유도
-    -   한 번에 모든 정보를 제공하지 말고, 사용자가 필요한 만큼만 단계적으로 제공
+        self.question_log = []
+        self.session_tracker = {}
 
-2.  **문장 나누기 규칙 (슬랙 가독성 - 필수 준수)**
-    -   모든 문장 끝에 줄바꿈: `~습니다.`, `~됩니다.`, `~세요.`, `~요.` 등으로 끝나는 모든 문장 뒤에는 반드시 한 번의 줄바꿈을 해야 합니다.
-    -   한 줄에 하나의 완전한 문장만 작성
-    -   빈 줄은 만들지 않고 연속적인 문장으로 구성
-    -   긴 설명은 여러 문장으로 나누어 각각 줄바꿈 처리
-    > **잘못된 예시:**
-    > 안녕하세요! 회의실 예약은 구글 캘린더를 사용합니다. 구글 캘린더에서 새 일정을 만들 때 회의실 리소스를 추가하면 됩니다.
-    >
-    > **올바른 예시:**
-    > 안녕하세요!
-    > 회의실 예약은 구글 캘린더를 사용합니다.
-    > 구글 캘린더에서 새 일정을 만들 때 회의실 리소스를 추가하면 됩니다.
+    def load_local_text_data(self, file_path="guide_data.txt"):
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                text = f.read()
+            logger.info(f"로컬 파일 '{file_path}'에서 데이터를 성공적으로 로드했습니다.")
+            for wrong, correct in self.ocr_fixes.items():
+                text = text.replace(wrong, correct)
+            return text
+        except FileNotFoundError:
+            logger.error(f"데이터 파일 '{file_path}'을 찾을 수 없습니다. 해당 경로에 파일을 생성해주세요.")
+            return ""
+        except Exception as e:
+            logger.error(f"로컬 파일 처리 중 오류 발생: {e}", exc_info=True)
+            return ""
 
-3.  **항목화된 정보 제공 (세부 지침)**
-    -   내용이 순서나 절차를 명확히 나타내는 경우 (예: 단계별 안내)에는 (필수) 반드시 번호 매기기(예: `1.`, `2.`)를 사용해주세요.
-    -   순서가 중요하지 않은 여러 항목들(예: 제도 특징, 조건 목록)을 나열할 경우에는 글머리 기호(`-` 또는 `*`)를 사용해주세요.
+    def setup_chroma_db(self):
+        db_path = os.environ.get("CHROMA_DB_PATH", "./chroma_db")
+        self.chroma_client = chromadb.PersistentClient(path=db_path)
+        self.collection = self.chroma_client.get_or_create_collection(
+            name="junggonara_guide",
+            metadata={"description": "중고나라 회사 가이드 데이터"}
+        )
+        self.embedding_model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
+        logger.info(f"ChromaDB({db_path}) 및 SentenceTransformer 설정 완료.")
 
-4.  **텍스트 강조 사용 금지 (가장 엄격하게 지켜야 할 규칙)**
-    답변의 그 어떤 부분에서도 텍스트를 굵게 만드는 마크다운 형식(예: `**단어**`)을 절대로 사용해서는 안 됩니다. 모든 의미상의 강조나 내용 구분은 오직 글머리 기호, 번호 매기기, 명확한 문장 구조를 통해서만 표현해야 합니다.
+    def setup_personalities(self):
+        self.current_personality = "friendly"
+        self.personalities = {
+            "professional": {"name": "피플AI 프로", "greeting": ["안녕하세요! 중고나라 피플AI 프로입니다.", "정확한 답변으로 도와드릴게요."]},
+            "friendly": {"name": "피플AI 친구", "greeting": ["안녕! 중고나라 동료들의 친구, 피플AI야.", "편하게 물어보자!"]},
+            "cheerful": {"name": "피플AI 해피", "greeting": ["좋은 하루! 피플AI 해피 모드야.", "어떤 도움을 줄까?"]}
+        }
+        logger.info("성격 설정 완료.")
 
-5.  **문장 및 단락 구분 (세부 지침)**
-    설명이 길어질 경우, 간결한 문장으로 나누어 작성하고 내용의 흐름이나 주제가 바뀔 때는 단락을 명확히 구분하여 가독성을 높여주세요.
+    def setup_responses(self):
+        self.responses = {
+            "searching": [
+                "생각하는 중입니다... 🤔",
+                "잠시만 기다려주세요. 피플AI가 열심히 답을 찾고 있어요! 🏃‍♂️",
+                "데이터를 분석하고 있어요. 곧 답변해 드릴게요! 📊",
+                "가이드북을 샅샅이 뒤지는 중... 📚"
+            ],
+            "not_found": ["음, 문의주신 부분은 제가 지금 명확히 답변드리기 어렵네요. ⚠️", "제가 아는 선에서는 해당 정보가 확인되지 않아요. ❌"]
+        }
+        logger.info("응답 메시지 설정 완료.")
 
-6.  **링크 형식 (세부 지침)**
-    -   본문에서는 링크의 존재와 내용을 간략히 언급합니다. (예: "자세한 내용은 관련 가이드에서 확인하실 수 있습니다.")
-    -   그 다음 줄에 글머리 기호(`-`)를 사용하여 구체적인 링크 정보와 URL을 명시합니다. 형식: `- 링크 설명 텍스트: URL주소`
-    > **예시 1:**
-    > 법인카드 분실/재발급 관련 추가적인 안내는 아래 링크에서 확인하실 수 있습니다.
-    > - 법인카드 분실/재발급 추가 가이드: https://example.com/guide
+    def setup_ocr_fixes(self):
+        self.ocr_fixes = {
+            "연치": "연차", "복리후셍": "복리후생", "회으실": "회의실",
+            "택배실": "택배실", "결제": "결재", "급여명세서": "급여명세서"
+        }
+        logger.info("OCR 수정 맵 설정 완료.")
 
-7.  **시각적 구분자 활용 (슬랙 최적화)**
-    다음 이모지들을 상황에 맞게 매우 제한적으로 활용하여 정보의 성격을 시각적으로 구분해주세요. 감정 표현 이모지는 절대 사용하지 마세요.
-    -   **행동 관련:** ✅, ❌, 🔄, ⏰, 📅
-    -   **정보 관련:** 📋, 💡, ⚠️, 📞, 🔗
-    -   **상태/결과 관련:** ✨, 📝, 💰, 🏢, 👥
+    def setup_events(self):
+        self.events = [
+            {"name": "분기별 타운홀 미팅", "date": "2025-09-15", "details": "👥 전 직원 참여, 오후 2시 대회의실 🏢"},
+            {"name": "연말 파티", "date": "2025-12-20", "details": "🎉 사내 연말 행사, 드레스 코드: 캐주얼"}
+        ]
+        logger.info("이벤트 설정 완료.")
 
----
-# 중고나라 회사 정보 학습 데이터 (20250529 버전)
+    # *** 수정된 부분: 데이터 분할 로직 개선 ***
+    def split_text_into_chunks(self, text, max_length=1000, overlap=100):
+        """의미 단위(문단)를 유지하며 텍스트를 청크로 나눕니다."""
+        # 빈 줄을 기준으로 문단을 나눕니다.
+        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+        
+        chunks = []
+        for paragraph in paragraphs:
+            # 문단이 최대 길이보다 짧으면 그대로 청크로 사용합니다.
+            if len(paragraph) <= max_length:
+                chunks.append(paragraph)
+            else:
+                # 문단이 길면, 문장 단위로 나누어 최대 길이를 넘지 않게 청크를 만듭니다.
+                sentences = [s.strip() for s in paragraph.split('.') if s.strip()]
+                current_chunk = ""
+                for sentence in sentences:
+                    if len(current_chunk) + len(sentence) + 1 <= max_length:
+                        current_chunk += sentence + ". "
+                    else:
+                        chunks.append(current_chunk.strip())
+                        # 이전 청크의 끝부분을 포함하여 문맥을 유지합니다 (overlap).
+                        current_chunk = current_chunk[-overlap:] + sentence + ". "
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+        
+        return [chunk for chunk in chunks if len(chunk) > 50] # 너무 짧은 청크는 제외
 
-## 1. 회사 기본 정보 및 환경
+    def is_question_pattern(self, text):
+        question_keywords = ["어떻게", "방법", "알려줘", "뭐야", "언제", "어디서", "누구", "연차", "회의실", "택배", "복리후생", "궁금"]
+        return any(keyword in text.lower() for keyword in question_keywords)
 
-### 1.1. 조직 정보
--   **자리배치도 및 조직도**
-    -   확인 가능한 링크: `https://docs.google.com/spreadsheets/d/1Vu18wREb6QFktUI52OYCW1vPFyr-37djX1-NvPwva3g/edit?gid=392126143#gid=392126143`
+    def detect_and_translate_language(self, text):
+        try:
+            detected = self.translator.detect(text)
+            if detected.lang != 'ko' and detected.lang != 'en':
+                translated_text = self.translator.translate(text, dest='ko').text
+                logger.info(f"'{detected.lang}' -> 'ko'로 번역됨. 원본: '{text[:20]}...', 번역: '{translated_text[:20]}...'")
+                return translated_text
+            return text
+        except Exception as e:
+            logger.error(f"언어 감지 또는 번역 실패: {e}", exc_info=True)
+            return text
 
-### 1.2. 사무 환경 (스파크플러스 공유오피스)
--   **입주 정보:** 중고나라 회사는 공유오피스 '스파크플러스(Sparkplus)'에 입주해 있습니다.
--   **혜택:** 입주사로서 스파크플러스가 제공하는 다양한 지원, 서비스, 행사를 경험할 수 있습니다.
--   **스파크플러스 공식 이용 가이드:** `https://sparkplus.oopy.io/`
--   **스파크플러스 간식데이 안내**
-    -   행사명: 스파크플러스 간식데이
-    -   일시: 매주 수요일, 오전 9시 30분부터 제공 시작
-    -   장소: 스파크플러스 2층 라운지
-    -   대상: 당일 출근한 중고나라 직원
-    -   수령 조건: 1인 1개 수령 가능
+    # *** 수정된 부분: 검색 범위 확장 (n_results=5) ***
+    def search_knowledge(self, query, n_results=5):
+        """사용자 질문에 대해 ChromaDB와 Gemini를 사용해 답변을 검색하고 생성합니다."""
+        processed_query = self.detect_and_translate_language(query)
+        for wrong, correct in self.ocr_fixes.items():
+            processed_query = processed_query.replace(wrong, correct)
+        
+        try:
+            context_docs = self.collection.query(
+                query_embeddings=self.embedding_model.encode([processed_query]).tolist(),
+                n_results=n_results
+            )
+            # 검색된 여러 조각을 하나의 큰 참고 자료로 합칩니다.
+            context = "\n\n".join(context_docs['documents'][0]) if context_docs and context_docs['documents'] else ""
+            logger.info(f"ChromaDB 검색 완료. 쿼리: {processed_query[:50]}... {n_results}개 결과 사용.")
+        except Exception as e:
+            logger.error(f"ChromaDB 검색 실패: {e}", exc_info=True)
+            context = ""
 
-### 1.3. 사내 시설 이용
+        if self.use_gemini:
+            try:
+                prompt = self.gemini_prompt_template.format(query=processed_query, context=context)
+                gemini_response = self.gemini_model.generate_content(prompt)
+                
+                if gemini_response and hasattr(gemini_response, 'text') and gemini_response.text:
+                    logger.info(f"Gemini API 응답 성공. 쿼리: {processed_query[:50]}...")
+                    return [gemini_response.text], "gemini"
+                else:
+                    logger.warning(f"Gemini API 응답이 비어있거나 유효하지 않습니다. 응답: {gemini_response}")
+            except Exception as e:
+                logger.error(f"Gemini API 호출 실패: {e}", exc_info=True)
+        
+        if context:
+            return [context], "chroma"
+        
+        return [], "not_found"
 
-#### 1.3.1. 회의실 사용 안내
--   **안내 목적:** 모든 직원이 원활하게 회의실을 사용할 수 있도록 효율적인 일정 관리 및 공간 활용에 대한 협조 요청입니다.
--   **회의실 사용 규칙**
-    -   시간 준수: 예약한 회의 시작 시간 및 종료 시간을 정확히 지켜주시기 바랍니다.
-    -   정리 정돈: 회의실 사용 후에는 다음 사용자를 위해 반드시 깨끗한 상태로 정리정돈 해주시기 바랍니다.
-    -   배려와 예약 관리: 불필요한 예약을 지양하고, 예약된 회의실을 사용하지 않을 경우 즉시 취소하여 다른 동료들이 사용할 수 있도록 배려해주시기 바랍니다.
--   **회의실 종류 및 상세 정보**
-    -   **코어 (Core) 회의실:** 최대 16명, 4K 빔프로젝터 설치
-    -   **트러스트 (Trust) 회의실:** 최대 8명, 기본 회의실
-    -   **인사이트 (Insight) 회의실:** 최대 6명, 소규모 집중 환경
-    -   **아이디어 (Idea) 회의실:** 최대 10명, 개방적 소통 구조
-    -   **홀 (Hall):** 최대 20명, 다목적 공간 (라운지/회의실)
--   **회의실 예약 방법**
-    -   **예약 도구:** 구글 캘린더(Google Calendar)
-    -   **예약 절차:** 구글 캘린더에서 새 일정을 만들 때, '회의실 등 리소스 추가' 옵션을 통해 예약합니다.
-    -   **관련 가이드:**
-        -   구글 캘린더 연동 가이드: `https://docs.google.com/presentation/d/1tN6ADSZdJ1aUx2aJnXoo34olgNWLrJzF4ofk-DC8W4s/preview?slide=id.p`
-        -   회의실 예약 상세 가이드: `https://docs.google.com/presentation/d/1n4hw4ZlLyppDkygDwnHvO-RDhP5merzmHvT91EsUUR4/preview?slide=id.p`
+    def generate_response(self, query, relevant_data, response_type, user_id, channel_id):
+        greeting = _get_session_greeting(self, user_id, channel_id)
+        
+        if response_type == "gemini":
+            response_text = relevant_data[0]
+            response = f"{greeting}{response_text}"
+        elif response_type == "chroma":
+            context = relevant_data[0]
+            response = f"{greeting}✅ 관련 정보를 찾았습니다:\n{context}\n더 궁금한 점이 있으시면 말씀해주세요."
+        else:
+            response_text = random.choice(self.responses['not_found'])
+            response = f"{greeting}{response_text}\n피플팀 담당자에게 문의해보시는 건 어떨까요? 📞"
 
-#### 1.3.2. 복합기 및 팩스 사용 안내
--   **제공 서비스:** 스파크플러스 전용 복합기(출력, 스캔) 및 인터넷 웹팩스
--   **전체 사용 등록 절차:**
-    1.  복합기 계정 등록
-    2.  필수 프로그램 설치
-    3.  복합기 인증카드 등록
--   **관련 링크:**
-    -   계정 등록 및 프로그램 다운로드: `https://cloudmps.sindoh.com:8443/sparkplus/loginForm?clientLanguage=ko`
-    -   설치 및 인증카드 등록 상세 가이드: `https://sparkplus.oopy.io/373bbaf2-d7b0-4621-9e39-5aa630ba0757`
--   **FAQ (자주 묻는 질문)**
-    -   **인증카드:** NFC 기능이 있는 스마트폰 또는 교통카드 기능이 포함된 신용/체크카드 사용 가능
-    -   **인증카드 재등록:** 분실 또는 교체 시, 신규 등록 절차와 동일하게 진행
-    -   **Mac 사용자 '대기 중' 오류:** VPN(FortiClient) 또는 Logitech 관련 앱과의 IP 충돌 가능성이 있으므로, 해당 프로그램의 자동 실행을 비활성화하거나 종료 후 시도
+        return response, response_type
 
-#### 1.3.3. 와이파이(Wi-Fi) 이용 안내
--   **직원용 와이파이**
-    -   SSID: `joonggonara-5G`
-    -   비밀번호: `jn2023!@`
--   **외부 방문객용 와이파이**
-    -   SSID: `joonggonara-guest-5G`
-    -   비밀번호: `guest2023!@`
+    def log_question(self, query, response_text, response_type):
+        self.question_log.append({
+            "query": query,
+            "response": response_text,
+            "response_type": response_type,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "personality": self.current_personality
+        })
+        logger.info(f"질문 로그 기록: 쿼리='{query[:50]}...', 응답 타입='{response_type}'")
 
-#### 1.3.4. 건물 주차 등록 안내
--   **목적:** 주로 외부 고객 차량 지원 목적
--   **지원 대상:** 외부 고객 (원칙적으로 직원 개인 차량 지원 불가)
--   **지원 기준:**
-    -   기본 30분 무료 (스파크플러스 제공)
-    -   초과 시간은 회사 비용으로 유료 주차권 지원
--   **주차 등록 시스템 (하이파킹) 로그인 정보**
-    -   ID: `petax@joonggonara.co.kr`
-    -   PW: `jn2023!@`
+# --- 봇 인스턴스 생성 ---
+bot = PeopleAIBot()
 
----
-## 2. 업무 시스템 및 도구
+# --- Slack 이벤트 핸들러 ---
+@app.message(".*")
+def handle_message(message, say):
+    try:
+        user_query = message['text']
+        channel_id = message['channel']
+        user_id = message['user']
+        
+        if message.get('user') == bot.bot_id:
+            return
 
-### 2.1. 스마트워크 협업툴
--   **슬랙 (Slack):** 전사 커뮤니케이션
--   **구글 워크스페이스 (GWS):** 이메일, 드라이브, 문서, 캘린더
--   **플렉스 (Flex):** 그룹웨어 (전자결재, 휴가, 근무 기록)
--   **컨플루언스 (Confluence):** 사내 위키 (지식 관리)
--   **지라 (Jira):** 프로젝트 관리 및 이슈 추적
+        auto_respond_channels_env = os.environ.get("AUTO_RESPOND_CHANNELS", "")
+        auto_respond_channels = [c.strip() for c in auto_respond_channels_env.split(',') if c.strip()]
+        
+        if (bot.bot_id and f"<@{bot.bot_id}>" in user_query or
+            message.get('channel_type') == 'im' or
+            (channel_id in auto_respond_channels and bot.is_question_pattern(user_query))):
+            
+            clean_query = user_query.replace(f"<@{bot.bot_id}>", "").strip() if bot.bot_id else user_query.strip()
+            
+            if not clean_query or len(clean_query) < 2:
+                logger.info(f"너무 짧거나 빈 쿼리 무시됨. 쿼리: '{clean_query}'")
+                return
+            
+            say(random.choice(bot.responses['searching']))
+            
+            relevant_data, response_type = bot.search_knowledge(clean_query)
+            response, final_response_type = bot.generate_response(clean_query, relevant_data, response_type, user_id, channel_id)
+            say(response)
+            bot.log_question(clean_query, response, final_response_type)
+            
+    except Exception as e:
+        logger.error(f"메시지 처리 실패: {e}", exc_info=True)
+        say(f"문제가 생겼어요. ⚠️\n잠시 후 다시 시도해주세요.")
 
-### 2.2. VPN 사용 안내
--   **필요성:** 재택/외근 시 내부 서버(백오피스, 어드민 등) 접속에 필요
--   **VPN 예외:** GWS, Slack, Jira, Flex 등은 VPN 없이 사용 가능
--   **관련 링크:**
-    -   VPN 사용/등록 가이드: `https://joonggonara.atlassian.net/wiki/spaces/SREv2/pages/2962227594/00.+VPN`
-    -   계정 신청 (Backstage): `https://backstage.joongna.com/create?filters%5Bkind%5D=template&filters%5Buser%5D=all`
+@app.message("피플AI 도움말")
+def handle_help(message, say):
+    user_id = message['user']
+    channel_id = message['channel']
+    greeting_prefix = _get_session_greeting(bot, user_id, channel_id)
 
-### 2.3. 업무 계정 신청 안내
--   **시스템 계정 (Slack, GWS, Flex, Jira, Confluence, MS오피스 등):**
-    -   신청/문의: 슬랙 채널 `#문의-피플팀`
--   **개발 및 내부 플랫폼 계정 (AWS, Git, VPN 등):**
-    -   신청/문의: Backstage 시스템 (`https://backstage.joongna.com/create?filters%5Bkind%5D=template&filters%5Buser%5D=all`)
+    help_text = """도움말을 알려드릴게요. ✨
+피플AI는 중고나라 직원들의 회사생활을 돕는 AI입니다.
+회사 정책, 복지, 절차 등을 질문하시면 빠르게 답변드립니다.
 
-### 2.4. PC 장비 운영 정책
--   **지급 장비:** 맥북(MacBook) 또는 윈도우 노트북(Windows Notebook) 선택 가능
--   **교체 주기:** 만 3년 경과 시 정기 교체 대상
--   **사용하던 PC 매입 옵션:**
-    -   3년 사용 후: 최초 구입 금액의 30%
-    -   4년 사용 후: 최초 구입 금액의 20%
--   **모니터:** 듀얼 모니터 환경 기본 제공
+📋 사용 예시:
+- `@피플AI 연차 신청 방법`
+- `#people-team-help` 채널에서: `택배 발송 절차는?`
+- DM으로: `How to book a meeting room?`
 
----
-## 3. 인사 및 조직 문화
+📝 명령어:
+- `피플AI 모드변경`: 성격 변경 (프로/친구/해피)
+- `피플AI 오늘의팁`: 회사생활 팁
+- `피플AI 맛집추천`: 회사 근처 맛집
+- `피플AI 이벤트`: 사내 이벤트 확인
 
-### 3.1. 소통 및 협업
+더 궁금한 점이 있으시면 말씀해주세요.
+"""
+    response = greeting_prefix + help_text
+    say(response)
 
-#### 3.1.1. 구성원 강점검사 (태니지먼트)
--   **목적:** 구성원 간 상호 이해 증진 및 협업 문화 조성
--   **검사 도구:** 태니지먼트 (Tanagement)
--   **관련 링크:**
-    -   워크스페이스: `https://tanagement.co.kr/login`
-    -   강점 지표 설명 자료: `https://docs.google.com/presentation/d/1gfDSX2HP_EwhkagLhr9uKO9rg-wr-0-tl6jmNN6rtP4/present?slide=id.g3410fd4fe1a_0_58`
+@app.message("피플AI 모드변경")
+def change_mode(message, say):
+    user_id = message['user']
+    channel_id = message['channel']
+    greeting_prefix = _get_session_greeting(bot, user_id, channel_id)
 
-#### 3.1.2. 1 on 1 미팅 가이드
--   **목적:** 리더와 구성원 간의 정기적인 소통을 통한 성장 지원
--   **운영 방법:**
-    -   주기: 최소 월 1회 이상 (주간 권장)
-    -   시간: 약 30분 내외
+    personalities = list(bot.personalities.keys())
+    current_index = personalities.index(bot.current_personality)
+    next_index = (current_index + 1) % len(personalities)
+    bot.current_personality = personalities[next_index]
+    
+    new_mode_name = bot.personalities[bot.current_personality]['name']
+    
+    response_text = f"모드 변경이 완료되었습니다. ✅\n현재 모드는 {new_mode_name}입니다.\n어떤 도움을 드릴까요?\n"
+    response = greeting_prefix + response_text
+    say(response)
 
-#### 3.1.3. 칭찬고래 프로그램
--   **목적:** 동료 간 칭찬과 감사를 통한 긍정적 문화 조성
--   **사용 방법:**
-    1.  사용하려는 채널에 `/invite @아기고래` 입력하여 봇 초대 (최초 1회)
-    2.  메시지에 `@동료이름`과 함께 칭찬 내용 및 `:고래:` 이모지(🐳)를 포함하여 전송
--   **공개 칭찬 채널:** `#10-칭찬고래`
+@app.message("피플AI 오늘의팁")
+def daily_tip(message, say):
+    user_id = message['user']
+    channel_id = message['channel']
+    greeting_prefix = _get_session_greeting(bot, user_id, channel_id)
 
-### 3.2. 성장 지원 (교육 및 학습)
+    tips = [
+        "💡 이메일 제목은 명확히 작성하세요.\n예시: '회의' 대신 '3/15 마케팅 회의'로!",
+        "⏰ 회의 5분 전 입장하면 인상 좋아요.",
+        "💰 사내 식당 무료 뷔페를 꼭 이용하세요. 점심 식비 절약에 최고! 😋"
+    ]
+    
+    tip = random.choice(tips)
+    response_text = f"오늘의 팁을 드릴게요. 📋\n{tip}\n더 궁금한 점이 있으시면 말씀해주세요.\n"
+    response = greeting_prefix + response_text
+    say(response)
 
-#### 3.2.1. 지식당(知食堂)
--   **자격증 취득 지원:**
-    -   지원 금액: 응시료 실비 (최대 20만원 한도)
-    -   신청: 플렉스(Flex)에서 '자격증 도전 신청서' 및 '자격증 취득 지원금 신청서' 작성
--   **지식공유회:**
-    -   개요: 구성원 누구나 강사가 되어 지식 공유
-    -   강사료: 시간당 50,000원 지급
--   **온라인/오프라인 교육 신청:**
-    -   신청: 지정된 신청서 링크 또는 플렉스 '교육 참가 신청서' 작성
-    -   온라인 교육 신청서: `https://docs.google.com/spreadsheets/d/1Vu18wREb6QFktUI52OYCW1vPFyr-37djX1-NvPwva3g/edit?gid=2038738349#gid=2038738349`
+@app.message("피플AI 맛집추천")
+def recommend_restaurant(message, say):
+    user_id = message['user']
+    channel_id = message['channel']
+    greeting_prefix = _get_session_greeting(bot, user_id, channel_id)
 
-#### 3.2.2. 다독다독 도서관 제도
--   **지원 내용:** 매월 1인당 1권 도서 구매 지원
--   **신청 방법:** 지정된 신청서 작성
--   **도서 신청 링크:** `https://docs.google.com/spreadsheets/d/1Vu18wREb6QFktUI52OYCW1vPFyr-37djX1-NvPwva3g/edit?gid=2090359617#gid=2090359617`
+    restaurants = [
+        "🍜 라멘집: 돈코츠 라멘 맛집 (도보 5분)",
+        "🍕 피자스쿨: 점심 특가 피자 (도보 3분)",
+        "🍱 한솥도시락: 간편한 도시락 (도보 2분)",
+        "☕ 스타벅스: 회의하기 좋은 카페 (도보 1분)"
+    ]
+    
+    recommended = '\n'.join(random.sample(restaurants, 2))
+    response_text = f"중고나라 근처 맛집을 추천드립니다. 🏢\n{recommended}\n더 궁금한 점이 있으시면 말씀해주세요.\n"
+    response = greeting_prefix + response_text
+    say(response)
 
-#### 3.2.3. 사내 스터디 프로그램: JOOM-IN
--   **구성:** 최소 3인 이상
--   **운영:** 최소 4주 이상, 월 2회 이상 진행
--   **지원 항목:** 도서, 온라인 강의, 자료 제본, 스터디 장소 등
+@app.message("피플AI 이벤트")
+def events(message, say):
+    user_id = message['user']
+    channel_id = message['channel']
+    greeting_prefix = _get_session_greeting(bot, user_id, channel_id)
 
-### 3.3. 인사 제도
+    today = datetime.now()
+    upcoming = [e for e in bot.events if datetime.strptime(e['date'], "%Y-%m-%d") >= today]
 
-#### 3.3.1. 레벨 제도 및 직책 체계
--   **직책 체계:** C 레벨, 팀장, 매니저
--   **레벨:** L1(Associate) ~ L6(Executive)로 구분되며, 개인의 역할과 역량에 따라 결정
+    if upcoming:
+        event_list = [f"- {e['name']} ({e['date']}): {e['details']}" for e in upcoming]
+        event_list_str = '\n'.join(event_list)
+        response_text = f"다가오는 이벤트를 알려드립니다. 📅\n이벤트 목록:\n{event_list_str}\n더 궁금한 점이 있으시면 말씀해주세요.\n"
+    else:
+        response_text = """현재 예정된 이벤트는 없습니다. 😔
+새로운 이벤트가 생기면 빠르게 알려드릴게요!
+더 궁금한 점이 있으시면 말씀해주세요.
+"""
+    response = greeting_prefix + response_text
+    say(response)
 
-#### 3.3.2. 2025년 평가 (성과관리)
--   **운영 주기:** 상반기, 하반기, 연간 (12월 최종 평가)
--   **상세 자료:** `https://docs.google.com/presentation/d/19ATK4LvNMAgUbBhnmVw8fdXu1OBYSk0xjyd-KPgJ8VQ/edit?slide=id.p1#slide=id.p1`
+# --- Flask 라우팅 ---
+@flask_app.route("/slack/events", methods=["POST"])
+def slack_events():
+    return handler.handle(request)
 
-#### 3.3.3. 스톡옵션(주식매수선택권) 행사
--   **행사 일정 (2025년 9월 기준):**
-    -   `2025-09-18(목)`: 청약서 제출
-    -   `2025-09-25(목)`: 행사금액 납입
--   **문의:** 재무회계팀 또는 피플팀
+@flask_app.route("/", methods=["GET"])
+def health_check():
+    return "피플AI 정상 작동중! 🟢"
 
-#### 3.3.4. 사내 인재 추천 제도
--   **보상:** 추천자와 입사자 모두에게 보상금 지급 (경력직 한정)
--   **보상 금액:** 직군 및 레벨에 따라 50만원 ~ 150만원 차등 지급
--   **지급 시점:** 수습 종료 후, 1년 3개월 근속 후 등 분할 지급
-
----
-## 4. 근무 및 복리후생
-
-### 4.1. 근무 제도
-
-#### 4.1.1. 기본 근무 안내
--   **근무 제도:** 부분 선택적 근무제
--   **코어타임:** 오전 10:00 ~ 오후 5:00 (휴게시간 1시간 포함)
--   **급여 지급일:** 매월 말일
-
-#### 4.1.2. 재택근무 가이드
--   **시행일:** 매주 수요일
--   **대상:** 본사 근무자 (인턴 및 수습 제외 원칙)
--   **코어타임:** 오전 10:00 ~ 오후 5:00 동일 적용
-
-#### 4.1.3. 코로나19 확진 시 대응
--   **조치:** 증상 정도에 따라 팀장과 협의 후 2~3일간 재택근무 진행
--   **신청:** 플렉스 '건강사유 재택근무 신청서' 작성
-
-### 4.2. 휴가 제도
--   **연차휴가:** 근속기간 기준, 1시간 단위 사용 가능
--   **유즈해피(UseHappy):** 매월 0.5일(4시간) 특별 반차 제공 (이월 불가)
--   **해피아워:** 생일 당월에 사용 가능한 2시간 특별 휴가
--   **리프레시 휴가:** 매년 입사기념일에 근속 연차별 차등 지급 (최소 2일 ~ 최대 10일)
--   **경조휴가:** 결혼, 출산, 사망 등 사유 발생 시 규정에 따라 휴가 및 경조금 지원
-
-### 4.3. 비용 지원
-
-#### 4.3.1. 식대 지원
--   **점심식대:** 개인 법인카드로 월 25만원 지원
--   **저녁식대 (야근 시):** 제로페이로 1만원 지원 (8시간 근무 후 30분 이상 초과 근무 시)
-
-#### 4.3.2. 업무교통비 (카카오 T)
--   **지원 기준:** 야근 후 심야(23시 이후) 퇴근, 외근 중 업무 목적 이동 시
--   **이용 방법:** 카카오 T 앱에서 업무용 호출번호(1357) 입력 후 이용
-
-#### 4.3.3. 팀 운영비
--   **지원 금액:** 1인당 월 4만원
--   **지급일:** 매월 첫 번째 영업일
-
-### 4.4. 건강 및 생활 지원
-
-#### 4.4.1. 건강검진
--   **지원 내용:** 매년 1회 KMI 한국의학연구소 종합 건강검진 지원
--   **예약 사이트:** `https://joonggonara.withkmi.or.kr/`
-
-#### 4.4.2. 명절 선물
--   **지원 내용:** 설, 추석에 1인당 10만원 상당의 선물 지급
-
-#### 4.4.3. 사내 택배 발송
--   **목적:** 임직원 중고거래 활동 지원
--   **마감 시간:** 평일 오후 1시
-
-#### 4.4.4. J클럽 (사내 동호회)
--   **지원 금액:** 1인당 월 2만원
--   **설립 조건:** 최소 7명, 3개 이상 조직 구성원 포함
-
----
-## 5. 행정 및 기타 지원
-
-### 5.1. 개인 서류 신청
--   **재직증명서:** 플렉스 > 내 프로필 > 문서/증명서에서 신청
--   **원천징수영수증:** 플렉스 > 워크플로우에서 신청
-
-### 5.2. 법인카드 관련
--   **분실 시:**
-    1.  본인이 직접 하나카드 고객센터(1800-1111)에 분실 신고
-    2.  플렉스에서 재발급 신청
--   **경비 정산:** 식대카드를 제외한 모든 법인카드는 '오토빌' 시스템을 통해 매월 정산
-
-### 5.3. 업무용 비품 신청
--   **신청 방법:** 플렉스 '구매 품의서' 작성
-
-### 5.4. 재무 및 회계
--   **급여계좌 변경:** 매월 20일까지 피플팀에 전달 및 플렉스 시스템에 반영
-
-### 5.5. 법무팀 지원
--   **요청 방법:** Jira를 통해 계약 검토, 법률 검토, 소송 진행 등 요청
--   **인감 날인:** 모든 결재 완료 후, 플렉스 '사용(법인)인감 날인신청서' 작성
-
----
-## 슬랙 피플팀 문의 내용 및 공지사항 정리
-
-### 자주 묻는 질문 (Q&A)
--   **급여 계좌 오류:** 플렉스 정보 확인 후 피플팀 박지영 매니저에게 문의
--   **유즈해피 사전 등록:** 불가 (해당 월에만 사용 및 등록 가능)
--   **건강검진 사원번호:** 휴대폰 번호 '010' 제외 8자리
--   **퇴근 기록 누락:** 다음 주 월요일 알람 수신 후 직접 수정
--   **외부 교육/컨퍼런스 참석:** 플렉스 '교육 참가 신청서' 또는 '외근/출장 신청서' 작성
--   **장비 문제 (모니터, 케이블 등):** 피플팀 방문 문의
--   **조직 변경 (슬랙 채널, 그룹명 등):** 피플팀 박지영/시현빈 매니저에게 요청
--   **독감 등 감염성 질환:** 5일간 재택근무 원칙 (플렉스 '건강사유 재택근무 신청서' 작성)
-
-### 피플팀 주요 공지사항
--   **급여계좌 변경:** 매월 20일 이전 신청 건에 한해 당월 적용
--   **해피아워(생일 휴가):** 생일 당월에만 사용 가능 (이월 불가)
--   **근태:** 재택근무일 연장근무 시 사전 신청 필수, 코어타임(10~17시) 준수
-
-### 피플팀 문의 채널 안내
--   **채널:** `#문의-피플팀`
--   **주요 담당자:**
-    -   **근태/휴가:** 피플팀 박지영
-    -   **급여/4대보험:** 피플팀 박지영
-    -   **성과/평가:** 피플팀 김광수
-    -   **채용:** 피플팀 박지영
-    -   **업무계정:** 피플팀 시현빈, 박지영
-    -   **장비/소프트웨어:** 피플팀 김정수, 시현빈
-    -   **건강검진/스터디/동호회:** 피플팀 박지영
-
----
-## 주요 전사 공지사항 및 정책 변경
--   **법인카드 회식:** 시간 제한 규정 삭제
--   **건강검진:** 특수 검사 및 대장 내시경 지원 확대
--   **모성보호 제도 변경 (2025년 2월 23일 적용):** 배우자 출산휴가 20일로 확대, 육아휴직 1년 6개월로 연장 등
-
----
-## 회사 기본 정보 요약
--   **회사명:** (주)중고나라
--   **대표이사:** 최인욱
--   **사업자 등록번호:** 215-87-87482
--   **본사 주소:** 서울특별시 강남구 테헤란로 415 (역삼동), L7 HOTELS 강남타워 4층
--   **공식 웹사이트:**
-    -   서비스: `https://www.joongna.com/`
-    -   기술 블로그: `https://teamblog.joonggonara.co.kr/`
+# --- 앱 실행 ---
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 3000))
+    logger.info(f"Flask 앱을 포트 {port}에서 실행합니다.")
+    flask_app.run(host="0.0.0.0", port=port)
