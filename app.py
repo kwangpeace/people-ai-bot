@@ -88,24 +88,33 @@ class PeopleAIBot:
         self.setup_key_info()
         self.setup_events()
         
-        if self.collection.count() == 0:
-            logger.info("ChromaDB 컬렉션이 비어있어 로컬 텍스트 파일 데이터를 로드합니다.")
-            text = self.load_local_text_data()
-            if text:
-                text_chunks = self.split_text_into_chunks(text)
-                if text_chunks:
-                    embeddings = self.embedding_model.encode(text_chunks)
-                    self.collection.add(
-                        documents=text_chunks,
-                        embeddings=embeddings.tolist(),
-                        ids=[f"chunk_{i}" for i in range(len(text_chunks))],
-                        metadatas=[{"source": "로컬 가이드 텍스트 파일", "chunk_id": i} for i in range(len(text_chunks))]
-                    )
-                    logger.info(f"로컬 텍스트 데이터 로드 완료: {len(text_chunks)}개 청크 추가됨.")
-                else:
-                    logger.warning("로컬 텍스트 파일에서 유효한 텍스트 청크를 추출하지 못했습니다.")
+        # *** 수정된 부분: 봇 시작 시 항상 DB를 새로 구축하도록 변경 ***
+        logger.info("DB 자동 업데이트를 위해 기존 ChromaDB 컬렉션을 삭제합니다.")
+        try:
+            self.chroma_client.delete_collection(name="junggonara_guide")
+            logger.info("기존 ChromaDB 컬렉션을 성공적으로 삭제했습니다.")
+        except Exception as e:
+            logger.warning(f"기존 ChromaDB 컬렉션 삭제 중 오류 발생 (초기 실행 시 정상): {e}")
+        
+        self.collection = self.chroma_client.get_or_create_collection(name="junggonara_guide")
+        logger.info("최신 가이드 데이터로 ChromaDB를 새로 구축합니다.")
+        text = self.load_local_text_data()
+        if text:
+            text_chunks = self.split_text_into_chunks(text)
+            if text_chunks:
+                embeddings = self.embedding_model.encode(text_chunks)
+                self.collection.add(
+                    documents=text_chunks,
+                    embeddings=embeddings.tolist(),
+                    ids=[f"chunk_{i}" for i in range(len(text_chunks))],
+                    metadatas=[{"source": "로컬 가이드 텍스트 파일", "chunk_id": i} for i in range(len(text_chunks))]
+                )
+                logger.info(f"최신 데이터로 ChromaDB 구축 완료: {len(text_chunks)}개 청크 추가됨.")
+            else:
+                logger.warning("가이드 텍스트 파일에서 유효한 텍스트 청크를 추출하지 못했습니다.")
         else:
-            logger.info("ChromaDB 컬렉션에 이미 데이터가 존재하여 로컬 파일 로드를 건너뜁니다.")
+            logger.error("가이드 텍스트 파일을 읽지 못해 DB를 구축할 수 없습니다.")
+
 
         self.question_log = []
         self.session_tracker = {}
@@ -128,10 +137,6 @@ class PeopleAIBot:
     def setup_chroma_db(self):
         db_path = os.environ.get("CHROMA_DB_PATH", "./chroma_db")
         self.chroma_client = chromadb.PersistentClient(path=db_path)
-        self.collection = self.chroma_client.get_or_create_collection(
-            name="junggonara_guide",
-            metadata={"description": "중고나라 회사 가이드 데이터"}
-        )
         self.embedding_model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
         logger.info(f"ChromaDB({db_path}) 및 SentenceTransformer 설정 완료.")
 
@@ -163,37 +168,26 @@ class PeopleAIBot:
         }
         logger.info("OCR 수정 맵 설정 완료.")
     
-    # *** 수정된 부분: 치트키 데이터 대폭 추가 ***
     def setup_key_info(self):
-        """AI가 놓치기 쉬운 핵심 정보를 키워드 기반으로 설정합니다."""
         self.key_info = [
-            # 기본 정보
             {"keywords": ["주소", "위치", "어디"], "answer": "✅ 우리 회사 주소는 '서울특별시 강남구 테헤란로 415, L7 HOTELS 강남타워 4층'입니다."},
             {"keywords": ["와이파이", "wifi", "wi-fi", "인터넷"], "answer": "✅ 직원용 와이파이는 'joonggonara-5G'이며, 비밀번호는 'jn2023!@'입니다.\n✅ 방문객용은 'joonggonara-guest-5G'이며, 비밀번호는 'guest2023!@'입니다."},
             {"keywords": ["택배마감", "택배 마감", "택배시간", "택배 시간"], "answer": "✅ 사내 택배 마감 시간은 평일 오후 1시입니다. 주말에는 수거하지 않으니 참고해주세요."},
             {"keywords": ["웹사이트", "홈페이지", "블로그"], "answer": "✅ 중고나라 공식 웹사이트 주소는 다음과 같습니다:\n- 중고나라 서비스: https://www.joongna.com/\n- 중고나라 기술 블로그: https://teamblog.joonggonara.co.kr/"},
             {"keywords": ["월급", "급여일"], "answer": "💰 급여일은 매월 말일입니다."},
-
-            # 휴가 관련
             {"keywords": ["연차", "휴가"], "answer": "✅ 연차휴가는 근속기간 기준으로 지급되며, 1시간 단위로도 사용할 수 있습니다.\n✨ 매월 0.5일의 특별 반차 '유즈해피'도 제공돼요! 더 자세한 휴가 종류(리프레시, 경조사 등)가 궁금하시면 구체적으로 질문해주세요."},
             {"keywords": ["리프레시", "근속"], "answer": "✨ 매년 입사기념일을 맞이하면 근속 연차에 따라 2일에서 최대 10일까지의 리프레시 휴가와 선물이 지급됩니다!"},
             {"keywords": ["유즈해피", "usehappy"], "answer": "✨ 매월 0.5일(4시간)의 특별 반차 휴가 '유즈해피'가 제공됩니다. 해당 월에 사용하지 않으면 소멸되니 잊지 말고 사용하세요!"},
-            {"keywords": ["민방위", "예비군"], "answer": "✅ 예비군/민방위 훈련은 플렉스(Flex)에서 '공가(예비군)'으로 신청하시면 유급 휴가로 처리됩니다. @이성헌 매니저가 담당자입니다."},
-
-            # 담당자 및 문의
+            {"keywords": ["민방위", "예비군"], "answer": "✅ 예비군/민방위 훈련은 플렉스(Flex)에서 '공가(예비군)'으로 신청하시면 유급 휴가로 처리됩니다. 담당자는 @이성헌 매니저입니다."},
             {"keywords": ["피플팀 담당자", "담당자", "문의"], "answer": "📞 피플팀 문의 채널(#문의-피플팀)을 이용하시거나, 아래 담당자에게 직접 문의하실 수 있습니다:\n- 근태/휴가: 이성헌님\n- 계약/규정: 박지영님\n- 평가: 김광수님\n- 채용: 이성헌님\n- 계정(구글/슬랙): 박지영님\n- 장비/소프트웨어: 시현빈님\n- 급여/4대보험: 이동훈님, 박지영님"},
             {"keywords": ["근태 담당자", "근태담당자", "근태 문의", "근무기록", "출퇴근 수정", "출근 체크"], "answer": "✅ Flex 근태, 휴가, 근무기록 수정 관련 문의는 @이성헌 매니저가 처리해드릴 거예요."},
             {"keywords": ["계정 잠김", "계정 초대", "슬랙 계정"], "answer": "✅ 구글, 슬랙 등 업무 계정 관련 문의는 @박지영 매니저 또는 @시현빈 매니저가 처리해드릴 거예요."},
-            
-            # 복지 및 비용
             {"keywords": ["법인카드", "식대", "제로페이"], "answer": "✅ 점심식대는 개인 법인카드로 월 25만원, 야근 시 저녁식대는 제로페이로 1만원이 지원됩니다. 팀 운영비나 업무 교통비에 대해서도 궁금하시면 더 물어보세요!"},
             {"keywords": ["카드 분실", "카드번호"], "answer": "✅ 법인카드 분실 시에는 즉시 하나카드 고객센터(1800-1111)에 분실 신고 후, 플렉스에서 재발급 신청을 해야 합니다. 자세한 문의는 재무회계팀(@이지영, @이소영)으로 해주세요."},
             {"keywords": ["건강검진", "검진"], "answer": "✅ 매년 1회 KMI 한국의학연구소에서 종합 건강검진을 지원하고 있습니다. 자세한 예약 방법이나 대상자 확인이 필요하시면 말씀해주세요."},
             {"keywords": ["도서", "책 신청", "다독다독"], "answer": "📚 '다독다독' 도서 지원 제도를 통해 매월 1인당 1권의 도서 구매를 지원합니다. @김정수 매니저가 처리해드릴 거예요."},
             {"keywords": ["교육", "강의", "지식당"], "answer": "🎓 '지식당' 프로그램을 통해 자격증 응시료, 온라인/오프라인 교육 등을 지원하고 있습니다. 교육 구매 신청은 @김정수 매니저가 처리해드릴 거예요."},
             {"keywords": ["추천", "보상금", "인재추천"], "answer": "💰 사내 인재 추천 제도를 통해 인재를 추천하고, 해당 인재가 입사하면 추천자와 입사자 모두에게 보상금이 지급됩니다. 직군과 레벨에 따라 금액이 달라져요!"},
-
-            # 업무 및 장비
             {"keywords": ["재택", "재택근무"], "answer": "✅ 재택근무는 매주 수요일에 운영되며, 코어타임(10시~17시)은 동일하게 적용됩니다."},
             {"keywords": ["장비", "고장", "교체", "노트북", "맥북", "모니터", "깜빡"], "answer": "💻 업무용 PC는 3년 주기로 교체되며, 장비 고장이나 기타 문의는 @시현빈 매니저가 처리해드릴 거예요."},
             {"keywords": ["퀵", "계약서 전달"], "answer": "🛵 퀵 신청은 후다닥퀵(https://www.hudadaq.com/)을 이용하며, 자세한 방법은 @시현빈 매니저에게 문의해주세요."}
