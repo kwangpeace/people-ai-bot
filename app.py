@@ -63,19 +63,24 @@ class PeopleAIBot:
         self.gemini_prompt_template = """
 [당신의 역할]
 당신은 '중고나라' 회사의 피플팀(People Team) 소속의 AI 어시스턴트입니다. 당신의 이름은 '피플 AI'이며, 동료 직원들에게 회사 생활과 관련된 다양한 정보를 친절하고 정확하게 안내하는 것이 당신의 주된 임무입니다. 당신은 매우 유능하며, 동료들을 돕는 것을 중요하게 생각합니다.
+
 [주요 임무]
 정보 제공: 동료 '중고나라' 직원들이 회사 정책, 복지, 내부 절차, 조직 문화 등 회사 전반에 대해 질문하면, 당신에게 제공된 '참고 자료'에 근거하여 명확하고 이해하기 쉽게 답변해야 합니다.
 문맥 이해: 직원들이 대화 중에 '우리 회사', '우리 팀', '우리' 또는 이와 유사한 표현을 사용할 경우, 이는 항상 '중고나라' 회사를 지칭하는 것으로 이해하고 대화해야 합니다.
 
 [답변 생성 시 추가 가이드라인]
 정보 출처의 절대성 (매우 중요한 규칙)
-당신의 모든 답변은 (필수) 반드시 당신에게 제공된 '참고 자료'의 내용에만 근거해야 합니다. 이 규칙은 절대적이며, 당신의 일반 지식이나 외부 정보는 절대로 사용되어서는 안 됩니다.
+당신의 모든 답변은 (필수) 반드시 당신에게 제공된 '참고 자료'의 내용에만 근거해야 합니다. 이 규칙은 절대적이며, 당신의 일반 지식이나 외부 정보는 절대로 사용되어서는 안 됩니다. 만약 '참고 자료'에 질문에 대한 답변이 없다면, '참고 자료'에 정보가 없음을 명확히 밝히고, 외부 정보를 사용하지 마세요.
+
 소통 스타일 (지침)
 동료 직원을 대하는 것처럼, 전반적으로 친절하고 부드러운 어투를 사용해주세요. 답변이 기계적이거나 지나치게 정형화되지 않도록, 실제 사람이 대화하는 것처럼 더욱 자연스러운 흐름을 유지해주세요. 사용자의 상황에 공감하는 따뜻한 느낌을 전달하되, 답변의 명확성과 간결함이 우선시되어야 합니다. 지나치게 사무적이거나 딱딱한 말투는 피해주시고, 긍정적이고 협조적인 태도를 보여주세요. 핵심은 전문성을 유지하면서도 사용자가 편안하게 정보를 얻고 소통할 수 있도록 돕는 것입니다.
+
 명료성 (지침)
 답변은 명확하고 간결해야 합니다. 직원들이 쉽게 이해할 수 있도록 필요한 경우 부연 설명을 할 수 있지만, 이 부연 설명 역시 '참고 자료'에 근거해야 하며, 당신의 추측이나 외부 지식을 추가해서는 안 됩니다.
+
 언어 (지침)
 모든 답변은 자연스러운 한국어로 제공해야 합니다.
+
 가독성 높은 답변 형식 (매우 중요한 지침)
 1. 슬랙 최적화된 답변 구조 (매우 중요)
 첫 답변은 핵심 정보만 2-3줄로 간단히 제공하고, 긴 설명이나 상세 정보는 "더 자세한 내용이 필요하시면 말씀해주세요!" 형태로 추가 질문을 유도합니다.
@@ -87,6 +92,7 @@ class PeopleAIBot:
 답변의 어떤 부분에서도 텍스트를 굵게 만드는 마크다운 형식(예: **단어**)을 절대로 사용해서는 안 됩니다.
 5. 시각적 구분자 활용 (슬랙 최적화)
 다음 이모지들을 상황에 맞게 매우 제한적으로 활용하여 정보의 성격을 시각적으로 구분해주세요: ✅, ❌, 🔄, ⏰, 📅, 📋, 💡, ⚠️, 📞, 🔗, ✨, 📝, 💰, 🏢, 👥. 감정 표현 이모지는 절대 사용하지 마세요.
+
 인사 규칙 (매우 중요):
 첫 번째 질문에만 "안녕하세요!" 인사를 사용하고, 같은 대화 세션 내 추가 질문에는 인사 없이 바로 답변을 시작합니다.
 만약 '참고 자료'에서 정보를 찾을 수 없으면, "음, 문의주신 부분에 대해서는 제가 지금 바로 명확한 답변을 드리기는 조금 어렵네요." 와 같이 부드럽게 답변하고, 피플팀 문의를 안내합니다.
@@ -98,6 +104,8 @@ class PeopleAIBot:
         self.setup_personalities()
         self.setup_responses()
         self.setup_ocr_fixes()
+        self.setup_faq()
+        self.setup_key_info() 
         self.setup_events()
         
         if self.collection.count() == 0:
@@ -156,7 +164,9 @@ class PeopleAIBot:
         }
         logger.info("성격 설정 완료.")
 
+    # *** 수정된 부분: 'searching' 메시지 추가 ***
     def setup_responses(self):
+        """상황별 기본 응답 메시지를 설정합니다."""
         self.responses = {
             "searching": [
                 "생각하는 중입니다... 🤔",
@@ -164,6 +174,7 @@ class PeopleAIBot:
                 "데이터를 분석하고 있어요. 곧 답변해 드릴게요! 📊",
                 "가이드북을 샅샅이 뒤지는 중... 📚"
             ],
+            "found": ["찾았습니다! 가이드에 따르면 다음과 같아요. ✅", "궁금하신 내용은 이렇게 정리됩니다. 💡"],
             "not_found": ["음, 문의주신 부분은 제가 지금 명확히 답변드리기 어렵네요. ⚠️", "제가 아는 선에서는 해당 정보가 확인되지 않아요. ❌"],
             "signature": ["- 중고나라 피플AI 드림 ✨"]
         }
@@ -175,6 +186,36 @@ class PeopleAIBot:
             "택배실": "택배실", "결제": "결재", "급여명세서": "급여명세서"
         }
         logger.info("OCR 수정 맵 설정 완료.")
+
+    def setup_faq(self):
+        self.faq = {
+            "연차 신청 방법": "✅ HR포털에서 최소 3일 전에 신청하세요.\n입사 1년 미만 11일, 이후 연 15일(최대 25일) 제공됩니다.",
+            "회의실 예약": "⏰ 구글 캘린더로 예약하세요.\n최대 2주 전 신청 가능합니다.",
+            "택배 발송": "📦 사내 택배실에서 주 1회 지정일에 가능합니다.\n자세한 일정은 people@jungonara.com으로 문의하세요."
+        }
+        logger.info("FAQ 설정 완료.")
+
+    def setup_key_info(self):
+        """회사 주소, 와이파이, 담당자 등 핵심 정보를 미리 설정합니다."""
+        self.key_info = [
+            {
+                "keywords": ["주소", "위치", "어디"],
+                "answer": "✅ 우리 회사 주소는 '서울특별시 강남구 테헤란로 415, L7 HOTELS 강남타워 4층'입니다."
+            },
+            {
+                "keywords": ["와이파이", "wifi", "wi-fi", "인터넷"],
+                "answer": "✅ 직원용 와이파이는 'joonggonara-5G'이며, 비밀번호는 'jn2023!@'입니다.\n✅ 방문객용은 'joonggonara-guest-5G'이며, 비밀번호는 'guest2023!@'입니다."
+            },
+            {
+                "keywords": ["택배마감", "택배 마감", "택배시간", "택배 시간"],
+                "answer": "✅ 사내 택배 마감 시간은 평일 오후 1시입니다. 주말에는 수거하지 않으니 참고해주세요."
+            },
+            {
+                "keywords": ["근태 담당자", "근태담당자", "근태 문의"],
+                "answer": "✅ Flex 근태, 휴가 관련 문의는 피플팀 이성헌님께 하시면 됩니다."
+            }
+        ]
+        logger.info("주요 정보(Key Info) 설정 완료.")
 
     def setup_events(self):
         self.events = [
@@ -222,54 +263,73 @@ class PeopleAIBot:
             return text
 
     def search_knowledge(self, query, n_results=3):
-        """사용자 질문에 대해 ChromaDB와 Gemini를 사용해 답변을 검색하고 생성합니다."""
         processed_query = self.detect_and_translate_language(query)
         for wrong, correct in self.ocr_fixes.items():
             processed_query = processed_query.replace(wrong, correct)
         
-        try:
-            context_docs = self.collection.query(
-                query_embeddings=self.embedding_model.encode([processed_query]).tolist(),
-                n_results=n_results
-            )
-            context = "\n".join(context_docs['documents'][0]) if context_docs and context_docs['documents'] else ""
-            logger.info(f"ChromaDB 검색 완료. 쿼리: {processed_query[:50]}...")
-        except Exception as e:
-            logger.error(f"ChromaDB 검색 실패: {e}", exc_info=True)
-            context = ""
+        for info in self.key_info:
+            for keyword in info["keywords"]:
+                if keyword in processed_query:
+                    logger.info(f"주요 정보에서 일치하는 키워드({keyword}) 발견.")
+                    return [info["answer"]], "key_info"
+
+        for faq_question, faq_answer in self.faq.items():
+            if faq_question.lower() in processed_query.lower():
+                logger.info(f"FAQ에서 일치하는 질문({faq_question}) 발견.")
+                return [faq_answer], "faq"
 
         if self.use_gemini:
             try:
-                prompt = self.gemini_prompt_template.format(query=processed_query, context=context)
-                gemini_response = self.gemini_model.generate_content(prompt)
+                context_docs = self.collection.query(
+                    query_embeddings=self.embedding_model.encode([processed_query]).tolist(),
+                    n_results=n_results
+                )
+                context = "\n".join(context_docs['documents'][0]) if context_docs['documents'] else ""
                 
-                if gemini_response and hasattr(gemini_response, 'text') and gemini_response.text:
+                prompt = self.gemini_prompt_template.format(query=processed_query, context=context)
+                gemini_response = self.gemini_model.generate_content(prompt, safety_settings={'HARASSMENT': 'BLOCK_NONE', 'HATE_SPEECH': 'BLOCK_NONE', 'SEXUALLY_EXPLICIT': 'BLOCK_NONE', 'DANGEROUS_CONTENT': 'BLOCK_NONE'})                
+                if gemini_response and hasattr(gemini_response, 'text'):
                     logger.info(f"Gemini API 응답 성공. 쿼리: {processed_query[:50]}...")
                     return [gemini_response.text], "gemini"
                 else:
-                    logger.warning(f"Gemini API 응답이 비어있거나 유효하지 않습니다. 응답: {gemini_response}")
+                    logger.warning(f"Gemini API 응답이 유효하지 않습니다. 폴백 검색 시도. 응답: {gemini_response}")
             except Exception as e:
-                logger.error(f"Gemini API 호출 실패: {e}", exc_info=True)
+                logger.error(f"Gemini API 호출 실패: {e}. 폴백 검색 시도.", exc_info=True)
         
-        if context:
-            return [context], "chroma"
-        
-        return [], "not_found"
+        query_embedding = self.embedding_model.encode([processed_query])
+        results = self.collection.query(
+            query_embeddings=query_embedding.tolist(),
+            n_results=n_results
+        )
+        logger.info(f"ChromaDB 검색 완료. 쿼리: {processed_query[:50]}...")
+        return results['documents'][0] if results['documents'] else [], "chroma"
 
     def generate_response(self, query, relevant_data, response_type, user_id, channel_id):
         greeting = _get_session_greeting(self, user_id, channel_id)
         
-        if response_type == "gemini":
+        response_text = ""
+        final_response_type = response_type
+
+        if response_type == "key_info":
+            response_text = relevant_data[0]
+            response = f"{greeting}{response_text}\n더 궁금한 점이 있으시면 말씀해주세요."
+        elif response_type == "faq":
+            response_text = relevant_data[0]
+            response = f"{greeting}{random.choice(self.responses['found'])}\n{response_text}\n더 궁금한 점이 있으시면 말씀해주세요. 💡"
+        elif response_type == "gemini":
             response_text = relevant_data[0]
             response = f"{greeting}{response_text}"
-        elif response_type == "chroma":
-            context = relevant_data[0]
-            response = f"{greeting}✅ 관련 정보를 찾았습니다:\n{context}\n더 궁금한 점이 있으시면 말씀해주세요."
-        else:
-            response_text = random.choice(self.responses['not_found'])
-            response = f"{greeting}{response_text}\n피플팀 담당자에게 문의해보시는 건 어떨까요? 📞"
+        else: # chroma
+            if not relevant_data:
+                final_response_type = "not_found"
+                response_text = random.choice(self.responses['not_found'])
+                response = f"{greeting}{response_text}\n피플팀 담당자에게 문의해보시는 걸 추천드립니다. 📞"
+            else:
+                context = "\n".join(relevant_data[:2])
+                response_text = f"{random.choice(self.responses['found'])}\n{context}"
+                response = f"{greeting}{response_text}\n더 궁금한 점이 있으시면 말씀해주세요. 💡"
 
-        return f"{response}\n{random.choice(self.responses['signature'])}", response_type
+        return f"{response}\n{random.choice(self.responses['signature'])}", final_response_type
 
     def log_question(self, query, response_text, response_type):
         self.question_log.append({
@@ -285,8 +345,10 @@ class PeopleAIBot:
 bot = PeopleAIBot()
 
 # --- Slack 이벤트 핸들러 ---
+# *** 수정된 부분: 'searching' 메시지 전송 로직 추가 ***
 @app.message(".*")
 def handle_message(message, say):
+    """모든 메시지를 수신하여 봇을 호출해야 하는지 판별하고 응답합니다."""
     try:
         user_query = message['text']
         channel_id = message['channel']
@@ -308,6 +370,7 @@ def handle_message(message, say):
                 logger.info(f"너무 짧거나 빈 쿼리 무시됨. 쿼리: '{clean_query}'")
                 return
             
+            # 사용자에게 즉시 피드백을 주기 위해 '찾는 중' 메시지를 먼저 보냅니다.
             say(random.choice(bot.responses['searching']))
             
             relevant_data, response_type = bot.search_knowledge(clean_query)
