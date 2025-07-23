@@ -7,287 +7,189 @@ from flask import Flask, request
 import chromadb
 from sentence_transformers import SentenceTransformer
 from datetime import datetime
-import json
-from googletrans import Translator
 import google.generativeai as genai
 
-# --- 로깅 설정 ---
-logging.basicConfig(level=logging.INFO, filename="people_ai_bot.log",
-                    format='%(asctime)s - %(levelname)s - %(message)s')
+# --- 로깅 설정 (표준 출력으로 변경하여 Railway 로그에서 확인 용이) ---
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s',
+                    handlers=[logging.StreamHandler()])
 logger = logging.getLogger(__name__)
 
 # --- 앱 초기화 ---
-app = App(
-    token=os.environ.get("SLACK_BOT_TOKEN"),
-    signing_secret=os.environ.get("SLACK_SIGNING_SECRET")
-)
-flask_app = Flask(__name__)
-handler = SlackRequestHandler(app)
+try:
+    app = App(
+        token=os.environ.get("SLACK_BOT_TOKEN"),
+        signing_secret=os.environ.get("SLACK_SIGNING_SECRET")
+    )
+    flask_app = Flask(__name__)
+    handler = SlackRequestHandler(app)
+    logger.info("Slack App 및 Flask 앱 초기화 성공")
+except Exception as e:
+    logger.critical(f"앱 초기화 실패! 환경 변수를 확인하세요. 오류: {e}")
+    # 앱 초기화 실패 시 실행을 중단해야 할 수 있음
+    exit()
 
-# --- 헬퍼 함수 ---
-def _get_session_greeting(bot_instance, user_id, channel_id):
-    session_key = (user_id, channel_id)
-    if session_key not in bot_instance.session_tracker:
-        bot_instance.session_tracker[session_key] = True
-        personality_greeting = random.choice(bot_instance.personalities[bot_instance.current_personality]['greeting'])
-        return f"{personality_greeting}\n"
-    return ""
 
 # --- 메인 봇 클래스 ---
 class PeopleAIBot:
     def __init__(self):
         self.bot_name = "피플AI"
         self.company_name = "중고나라"
-        self.translator = Translator()
-        self.use_gemini = os.environ.get("USE_GEMINI", "true").lower() == "true"
         
+        # 봇 ID 가져오기
         try:
             self.bot_id = app.client.auth_test()['user_id']
             logger.info(f"봇 ID({self.bot_id})를 성공적으로 가져왔습니다.")
         except Exception as e:
-            logger.error(f"봇 ID를 가져오는 데 실패했습니다. 슬랙 토큰을 확인하세요. 오류: {e}")
+            logger.error(f"봇 ID를 가져오는 데 실패했습니다. SLACK_BOT_TOKEN을 확인하세요. 오류: {e}")
             self.bot_id = None
 
-        if self.use_gemini:
-            gemini_api_key = os.environ.get("GEMINI_API_KEY")
-            if not gemini_api_key:
-                logger.error("GEMINI_API_KEY 환경 변수가 설정되지 않았습니다. Gemini 기능이 비활성화됩니다.")
-                self.use_gemini = False
-            else:
-                genai.configure(api_key=gemini_api_key)
-                self.gemini_model = genai.GenerativeModel("gemini-2.0-flash")
-                logger.info("Gemini API 활성화.")
-        else:
-            logger.info("Gemini API 비활성화.")
+        # Gemini API 설정
+        self.gemini_model = self.setup_gemini()
 
-        self.gemini_prompt_template = """
-[당신의 역할]
-당신은 '중고나라' 회사의 피플팀(People Team) 소속의 AI 어시스턴트입니다. 당신의 이름은 '피플 AI'이며, 동료 직원들에게 회사 생활과 관련된 다양한 정보를 친절하고 정확하게 안내하는 것이 당신의 주된 임무입니다. 당신은 매우 유능하며, 동료들을 돕는 것을 중요하게 생각합니다.
-[주요 임무]
-정보 제공: 동료 '중고나라' 직원들이 회사 정책, 복지, 내부 절차, 조직 문화 등 회사 전반에 대해 질문하면, 당신에게 제공된 '참고 자료'에 근거하여 명확하고 이해하기 쉽게 답변해야 합니다.
-문맥 이해: 직원들이 대화 중에 '우리 회사', '우리 팀', '우리' 또는 이와 유사한 표현을 사용할 경우, 이는 항상 '중고나라' 회사를 지칭하는 것으로 이해하고 대화해야 합니다.
+        # ChromaDB 및 임베딩 모델 설정
+        self.collection, self.embedding_model = self.setup_chroma_db()
 
-[답변 생성 시 추가 가이드라인]
-정보 출처의 절대성 (매우 중요한 규칙)
-당신의 모든 답변은 (필수) 반드시 당신에게 제공된 '참고 자료'의 내용에만 근거해야 합니다. 이 규칙은 절대적이며, 당신의 일반 지식이나 외부 정보는 절대로 사용되어서는 안 됩니다. '참고 자료'를 철저히 분석하여, 사용자의 질문에 가장 정확한 답변을 찾아내세요.
-소통 스타일 (지침)
-동료 직원을 대하는 것처럼, 전반적으로 친절하고 부드러운 어투를 사용해주세요. 답변이 기계적이거나 지나치게 정형화되지 않도록, 실제 사람이 대화하는 것처럼 더욱 자연스러운 흐름을 유지해주세요. 사용자의 상황에 공감하는 따뜻한 느낌을 전달하되, 답변의 명확성과 간결함이 우선시되어야 합니다. 지나치게 사무적이거나 딱딱한 말투는 피해주시고, 긍정적이고 협조적인 태도를 보여주세요. 핵심은 전문성을 유지하면서도 사용자가 편안하게 정보를 얻고 소통할 수 있도록 돕는 것입니다.
-명료성 (지침)
-답변은 명확하고 간결해야 합니다. 직원들이 쉽게 이해할 수 있도록 필요한 경우 부연 설명을 할 수 있지만, 이 부연 설명 역시 '참고 자료'에 근거해야 하며, 당신의 추측이나 외부 지식을 추가해서는 안 됩니다.
-언어 (지침)
-모든 답변은 자연스러운 한국어로 제공해야 합니다.
-가독성 높은 답변 형식 (매우 중요한 지침)
-1. 슬랙 최적화된 답변 구조 (매우 중요)
-첫 답변은 핵심 정보만 2-3줄로 간단히 제공하고, 긴 설명이나 상세 정보는 "더 자세한 내용이 필요하시면 말씀해주세요!" 형태로 추가 질문을 유도합니다.
-2. 문장 나누기 규칙 (슬랙 가독성 - 필수 준수)
-모든 문장 끝("~습니다.", "~됩니다.", "~세요.", "~요." 등) 뒤에는 반드시 한 번의 줄바꿈을 해야 합니다. 한 줄에 하나의 완전한 문장만 작성합니다.
-3. 항목화된 정보 제공 (세부 지침)
-순서나 절차가 중요하면 번호 매기기(1., 2., 3.)를, 그렇지 않으면 글머리 기호(- 또는 *)를 사용합니다.
-4. 텍스트 강조 사용 금지 (가장 엄격하게 지켜야 할 규칙)
-답변의 어떤 부분에서도 텍스트를 굵게 만드는 마크다운 형식(예: **단어**)을 절대로 사용해서는 안 됩니다.
-5. 시각적 구분자 활용 (슬랙 최적화)
-다음 이모지들을 상황에 맞게 매우 제한적으로 활용하여 정보의 성격을 시각적으로 구분해주세요: ✅, ❌, 🔄, ⏰, 📅, 📋, 💡, ⚠️, 📞, 🔗, ✨, 📝, 💰, 🏢, 👥. 감정 표현 이모지는 절대 사용하지 마세요.
-인사 규칙 (매우 중요):
-첫 번째 질문에만 "안녕하세요!" 인사를 사용하고, 같은 대화 세션 내 추가 질문에는 인사 없이 바로 답변을 시작합니다.
-만약 '참고 자료'에서 정보를 찾을 수 없으면, "음, 문의주신 부분에 대해서는 제가 지금 바로 명확한 답변을 드리기는 조금 어렵네요." 와 같이 부드럽게 답변하고, 피플팀 문의를 안내합니다.
-
-질문: {query}
-참고 자료: {context}
-"""
-        self.setup_chroma_db()
-        self.setup_personalities()
-        self.setup_responses()
-        self.setup_ocr_fixes()
-        self.setup_events()
+        # 데이터베이스에 지식 데이터 로드
+        self.load_knowledge_data()
         
-        # ChromaDB 초기화 및 데이터 로딩
-        # *** 중요: DB를 새로 만들려면 서버에서 chroma_db 폴더를 삭제해야 합니다. ***
-        if self.collection.count() == 0:
-            logger.info("ChromaDB 컬렉션이 비어있어 로컬 텍스트 파일 데이터를 로드합니다.")
-            text = self.load_local_text_data()
-            if text:
-                text_chunks = self.split_text_into_chunks(text)
-                if text_chunks:
-                    embeddings = self.embedding_model.encode(text_chunks)
-                    self.collection.add(
-                        documents=text_chunks,
-                        embeddings=embeddings.tolist(),
-                        ids=[f"chunk_{i}" for i in range(len(text_chunks))],
-                        metadatas=[{"source": "로컬 가이드 텍스트 파일", "chunk_id": i} for i in range(len(text_chunks))]
-                    )
-                    logger.info(f"로컬 텍스트 데이터 로드 완료: {len(text_chunks)}개 청크 추가됨.")
-                else:
-                    logger.warning("로컬 텍스트 파일에서 유효한 텍스트 청크를 추출하지 못했습니다.")
-        else:
-            logger.info("ChromaDB 컬렉션에 이미 데이터가 존재하여 로컬 파일 로드를 건너뜁니다.")
-
-        self.question_log = []
+        # 기타 설정
+        self.setup_bot_features()
         self.session_tracker = {}
 
-    def load_local_text_data(self, file_path="guide_data.txt"):
+    def setup_gemini(self):
+        """Gemini API 클라이언트를 설정하고 모델을 반환합니다."""
+        gemini_api_key = os.environ.get("GEMINI_API_KEY")
+        if not gemini_api_key:
+            logger.error("GEMINI_API_KEY 환경 변수가 설정되지 않았습니다. Gemini 기능이 비활성화됩니다.")
+            return None
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                text = f.read()
-            logger.info(f"로컬 파일 '{file_path}'에서 데이터를 성공적으로 로드했습니다.")
-            for wrong, correct in self.ocr_fixes.items():
-                text = text.replace(wrong, correct)
-            return text
-        except FileNotFoundError:
-            logger.error(f"데이터 파일 '{file_path}'을 찾을 수 없습니다. 해당 경로에 파일을 생성해주세요.")
-            return ""
+            genai.configure(api_key=gemini_api_key)
+            model = genai.GenerativeModel("gemini-1.5-flash-latest") # 필요시 "gemini-2.0-flash"로 변경
+            logger.info("Gemini API 활성화 완료.")
+            return model
         except Exception as e:
-            logger.error(f"로컬 파일 처리 중 오류 발생: {e}", exc_info=True)
-            return ""
+            logger.error(f"Gemini 모델 설정 실패: {e}")
+            return None
 
     def setup_chroma_db(self):
-        db_path = os.environ.get("CHROMA_DB_PATH", "./chroma_db")
-        self.chroma_client = chromadb.PersistentClient(path=db_path)
-        self.collection = self.chroma_client.get_or_create_collection(
-            name="junggonara_guide",
-            metadata={"description": "중고나라 회사 가이드 데이터"}
-        )
-        self.embedding_model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
-        logger.info(f"ChromaDB({db_path}) 및 SentenceTransformer 설정 완료.")
-
-    def setup_personalities(self):
-        self.current_personality = "friendly"
-        self.personalities = {
-            "professional": {"name": "피플AI 프로", "greeting": ["안녕하세요! 중고나라 피플AI 프로입니다.", "정확한 답변으로 도와드릴게요."]},
-            "friendly": {"name": "피플AI 친구", "greeting": ["안녕! 중고나라 동료들의 친구, 피플AI야.", "편하게 물어보자!"]},
-            "cheerful": {"name": "피플AI 해피", "greeting": ["좋은 하루! 피플AI 해피 모드야.", "어떤 도움을 줄까?"]}
-        }
-        logger.info("성격 설정 완료.")
-
-    def setup_responses(self):
-        self.responses = {
-            "searching": [
-                "생각하는 중입니다... 🤔",
-                "잠시만 기다려주세요. 피플AI가 열심히 답을 찾고 있어요! 🏃‍♂️",
-                "데이터를 분석하고 있어요. 곧 답변해 드릴게요! 📊",
-                "가이드북을 샅샅이 뒤지는 중... 📚"
-            ],
-            "not_found": ["음, 문의주신 부분은 제가 지금 명확히 답변드리기 어렵네요. ⚠️", "제가 아는 선에서는 해당 정보가 확인되지 않아요. ❌"]
-        }
-        logger.info("응답 메시지 설정 완료.")
-
-    def setup_ocr_fixes(self):
-        self.ocr_fixes = {
-            "연치": "연차", "복리후셍": "복리후생", "회으실": "회의실",
-            "택배실": "택배실", "결제": "결재", "급여명세서": "급여명세서"
-        }
-        logger.info("OCR 수정 맵 설정 완료.")
-
-    def setup_events(self):
-        self.events = [
-            {"name": "분기별 타운홀 미팅", "date": "2025-09-15", "details": "👥 전 직원 참여, 오후 2시 대회의실 🏢"},
-            {"name": "연말 파티", "date": "2025-12-20", "details": "🎉 사내 연말 행사, 드레스 코드: 캐주얼"}
-        ]
-        logger.info("이벤트 설정 완료.")
-
-    # *** 수정된 부분: 데이터 분할 로직 개선 ***
-    def split_text_into_chunks(self, text, max_length=1000, overlap=100):
-        """의미 단위(문단)를 유지하며 텍스트를 청크로 나눕니다."""
-        # 빈 줄을 기준으로 문단을 나눕니다.
-        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
-        
-        chunks = []
-        for paragraph in paragraphs:
-            # 문단이 최대 길이보다 짧으면 그대로 청크로 사용합니다.
-            if len(paragraph) <= max_length:
-                chunks.append(paragraph)
-            else:
-                # 문단이 길면, 문장 단위로 나누어 최대 길이를 넘지 않게 청크를 만듭니다.
-                sentences = [s.strip() for s in paragraph.split('.') if s.strip()]
-                current_chunk = ""
-                for sentence in sentences:
-                    if len(current_chunk) + len(sentence) + 1 <= max_length:
-                        current_chunk += sentence + ". "
-                    else:
-                        chunks.append(current_chunk.strip())
-                        # 이전 청크의 끝부분을 포함하여 문맥을 유지합니다 (overlap).
-                        current_chunk = current_chunk[-overlap:] + sentence + ". "
-                if current_chunk:
-                    chunks.append(current_chunk.strip())
-        
-        return [chunk for chunk in chunks if len(chunk) > 50] # 너무 짧은 청크는 제외
-
-    def is_question_pattern(self, text):
-        question_keywords = ["어떻게", "방법", "알려줘", "뭐야", "언제", "어디서", "누구", "연차", "회의실", "택배", "복리후생", "궁금"]
-        return any(keyword in text.lower() for keyword in question_keywords)
-
-    def detect_and_translate_language(self, text):
+        """ChromaDB 클라이언트와 임베딩 모델을 설정하고 반환합니다."""
         try:
-            detected = self.translator.detect(text)
-            if detected.lang != 'ko' and detected.lang != 'en':
-                translated_text = self.translator.translate(text, dest='ko').text
-                logger.info(f"'{detected.lang}' -> 'ko'로 번역됨. 원본: '{text[:20]}...', 번역: '{translated_text[:20]}...'")
-                return translated_text
-            return text
+            db_path = "./chroma_db"  # 로컬 파일 시스템에 저장
+            chroma_client = chromadb.PersistentClient(path=db_path)
+            collection = chroma_client.get_or_create_collection(
+                name="junggonara_guide",
+                metadata={"description": "중고나라 회사 가이드 데이터"}
+            )
+            embedding_model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
+            logger.info(f"ChromaDB({db_path}) 및 SentenceTransformer 설정 완료.")
+            return collection, embedding_model
         except Exception as e:
-            logger.error(f"언어 감지 또는 번역 실패: {e}", exc_info=True)
-            return text
+            logger.critical(f"ChromaDB 또는 임베딩 모델 설정 실패: {e}")
+            return None, None
+            
+    def load_knowledge_data(self):
+        """guide_data.txt 파일에서 지식 데이터를 읽어 ChromaDB에 저장합니다."""
+        if not self.collection or not self.embedding_model:
+            logger.error("DB 또는 모델이 초기화되지 않아 데이터 로드를 건너뜁니다.")
+            return
 
-    # *** 수정된 부분: 검색 범위 확장 (n_results=5) ***
-    def search_knowledge(self, query, n_results=5):
-        """사용자 질문에 대해 ChromaDB와 Gemini를 사용해 답변을 검색하고 생성합니다."""
-        processed_query = self.detect_and_translate_language(query)
-        for wrong, correct in self.ocr_fixes.items():
-            processed_query = processed_query.replace(wrong, correct)
-        
+        # DB가 비어있을 때만 데이터를 새로 로드합니다.
+        # DB를 강제로 새로고침하려면 서버에서 chroma_db 폴더를 삭제해야 합니다.
+        if self.collection.count() > 0:
+            logger.info("ChromaDB에 이미 데이터가 존재하여 로드를 건너뜁니다.")
+            return
+            
         try:
-            context_docs = self.collection.query(
-                query_embeddings=self.embedding_model.encode([processed_query]).tolist(),
+            with open("guide_data.txt", 'r', encoding='utf-8') as f:
+                text = f.read()
+            
+            # '---' 기준으로 텍스트를 분할하여 의미 단위의 청크 생성
+            text_chunks = [chunk.strip() for chunk in text.split('---') if chunk.strip()]
+
+            if not text_chunks:
+                logger.warning("guide_data.txt 파일이 비어있거나 유효한 청크가 없습니다.")
+                return
+
+            # 데이터베이스에 청크 추가
+            embeddings = self.embedding_model.encode(text_chunks)
+            ids = [f"chunk_{i}" for i in range(len(text_chunks))]
+            self.collection.add(
+                documents=text_chunks,
+                embeddings=embeddings.tolist(),
+                ids=ids,
+                metadatas=[{"source": "guide_data.txt"} for _ in text_chunks]
+            )
+            logger.info(f"지식 데이터 로드 완료: {len(text_chunks)}개 청크가 DB에 추가되었습니다.")
+
+        except FileNotFoundError:
+            logger.error("데이터 파일 'guide_data.txt'을 찾을 수 없습니다. 프로젝트 루트에 파일을 생성해주세요.")
+        except Exception as e:
+            logger.error(f"지식 데이터 로드 중 오류 발생: {e}", exc_info=True)
+
+    def search_knowledge(self, query, n_results=3):
+        """사용자 질문과 가장 관련 높은 지식 청크를 ChromaDB에서 검색합니다."""
+        if not self.collection:
+            return ""
+        try:
+            results = self.collection.query(
+                query_texts=[query],
                 n_results=n_results
             )
-            # 검색된 여러 조각을 하나의 큰 참고 자료로 합칩니다.
-            context = "\n\n".join(context_docs['documents'][0]) if context_docs and context_docs['documents'] else ""
-            logger.info(f"ChromaDB 검색 완료. 쿼리: {processed_query[:50]}... {n_results}개 결과 사용.")
+            # 검색된 문서들을 하나의 컨텍스트로 결합
+            context = "\n\n---\n\n".join(results['documents'][0]) if results['documents'] else ""
+            logger.info(f"'{query}'에 대한 지식 검색 완료. {len(results['documents'][0])}개의 관련 청크를 찾았습니다.")
+            # 디버깅을 위해 검색된 컨텍스트를 로그로 출력
+            logger.debug(f"검색된 컨텍스트:\n{context}")
+            return context
         except Exception as e:
             logger.error(f"ChromaDB 검색 실패: {e}", exc_info=True)
-            context = ""
+            return ""
 
-        if self.use_gemini:
-            try:
-                prompt = self.gemini_prompt_template.format(query=processed_query, context=context)
-                gemini_response = self.gemini_model.generate_content(prompt)
-                
-                if gemini_response and hasattr(gemini_response, 'text') and gemini_response.text:
-                    logger.info(f"Gemini API 응답 성공. 쿼리: {processed_query[:50]}...")
-                    return [gemini_response.text], "gemini"
-                else:
-                    logger.warning(f"Gemini API 응답이 비어있거나 유효하지 않습니다. 응답: {gemini_response}")
-            except Exception as e:
-                logger.error(f"Gemini API 호출 실패: {e}", exc_info=True)
-        
-        if context:
-            return [context], "chroma"
-        
-        return [], "not_found"
+    def generate_final_answer(self, query, context):
+        """검색된 컨텍스트를 바탕으로 Gemini를 이용해 최종 답변을 생성합니다."""
+        if not self.gemini_model:
+            return "AI 모델이 설정되지 않아 답변을 생성할 수 없습니다. 관리자에게 문의해주세요."
 
-    def generate_response(self, query, relevant_data, response_type, user_id, channel_id):
-        greeting = _get_session_greeting(self, user_id, channel_id)
-        
-        if response_type == "gemini":
-            response_text = relevant_data[0]
-            response = f"{greeting}{response_text}"
-        elif response_type == "chroma":
-            context = relevant_data[0]
-            response = f"{greeting}✅ 관련 정보를 찾았습니다:\n{context}\n더 궁금한 점이 있으시면 말씀해주세요."
-        else:
-            response_text = random.choice(self.responses['not_found'])
-            response = f"{greeting}{response_text}\n피플팀 담당자에게 문의해보시는 건 어떨까요? 📞"
+        # Gemini에게 전달할 프롬프트
+        prompt = f"""
+[당신의 역할]
+당신은 '중고나라' 회사의 피플팀 AI 어시스턴트 '피플AI'입니다. 동료 직원들에게 회사 생활 정보를 친절하고 정확하게 안내하는 것이 당신의 임무입니다.
 
-        return response, response_type
+[매우 중요한 규칙]
+- **반드시** 아래 제공된 '[참고 자료]' 내용에만 근거해서 답변해야 합니다. 당신의 일반 지식이나 외부 정보를 절대 사용하지 마세요.
+- 참고 자료에 질문과 관련된 내용이 전혀 없다면, "문의주신 내용은 제가 가진 정보에서는 찾기 어렵네요. 피플팀에 직접 문의해주시겠어요? 📞" 라고만 답변하세요.
+- 슬랙(Slack) 가독성에 최적화된 형식으로 답변해주세요.
+  1. 모든 문장 끝(~다, ~요 등)에는 줄바꿈을 넣어 한 줄에 한 문장만 표시합니다.
+  2. 텍스트를 굵게 만드는 마크다운(**)은 절대 사용하지 마세요.
+  3. 이모지는 정보 구분을 위해 제한적으로 사용하세요 (예: ✅, 📅, 💡, ⚠️). 감정 표현 이모지는 사용하지 마세요.
 
-    def log_question(self, query, response_text, response_type):
-        self.question_log.append({
-            "query": query,
-            "response": response_text,
-            "response_type": response_type,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "personality": self.current_personality
-        })
-        logger.info(f"질문 로그 기록: 쿼리='{query[:50]}...', 응답 타입='{response_type}'")
+---
+[참고 자료]
+{context}
+---
+
+[직원의 질문]
+{query}
+
+[답변]
+"""
+        try:
+            response = self.gemini_model.generate_content(prompt)
+            logger.info(f"Gemini API 응답 생성 성공. (쿼리: {query[:30]}...)")
+            return response.text
+        except Exception as e:
+            logger.error(f"Gemini API 호출 실패: {e}", exc_info=True)
+            return "AI 답변 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+
+    def setup_bot_features(self):
+        """봇의 고정적인 응답, 성격 등을 설정합니다."""
+        self.responses = {
+            "searching": ["잠시만요, 관련 정보를 찾고 있어요... 🕵️‍♀️", "생각하는 중... 🤔", "데이터를 분석하고 있어요! 📊"]
+        }
+        # 다른 기능들(성격, 이벤트 등) 필요 시 여기에 추가
+        logger.info("봇 기능 설정 완료.")
+
 
 # --- 봇 인스턴스 생성 ---
 bot = PeopleAIBot()
@@ -297,134 +199,44 @@ bot = PeopleAIBot()
 def handle_message(message, say):
     try:
         user_query = message['text']
-        channel_id = message['channel']
         user_id = message['user']
-        
-        if message.get('user') == bot.bot_id:
+        channel_id = message['channel']
+
+        # 봇 자신의 메시지는 무시
+        if bot.bot_id and user_id == bot.bot_id:
             return
 
-        auto_respond_channels_env = os.environ.get("AUTO_RESPOND_CHANNELS", "")
-        auto_respond_channels = [c.strip() for c in auto_respond_channels_env.split(',') if c.strip()]
+        # 봇을 멘션했거나, DM이거나, 특정 채널에서 질문 패턴이 감지될 때만 응답
+        is_im = message.get('channel_type') == 'im'
+        is_mentioned = bot.bot_id and f"<@{bot.bot_id}>" in user_query
         
-        if (bot.bot_id and f"<@{bot.bot_id}>" in user_query or
-            message.get('channel_type') == 'im' or
-            (channel_id in auto_respond_channels and bot.is_question_pattern(user_query))):
-            
-            clean_query = user_query.replace(f"<@{bot.bot_id}>", "").strip() if bot.bot_id else user_query.strip()
+        if is_im or is_mentioned:
+            # 멘션 제거 후 순수 쿼리 추출
+            clean_query = user_query.replace(f"<@{bot.bot_id}>", "").strip()
             
             if not clean_query or len(clean_query) < 2:
-                logger.info(f"너무 짧거나 빈 쿼리 무시됨. 쿼리: '{clean_query}'")
+                say("무엇이 궁금하신가요? 좀 더 구체적으로 질문해주세요. 😊")
                 return
             
-            say(random.choice(bot.responses['searching']))
+            # 1. "생각 중" 메시지 먼저 전송
+            thinking_message = say(random.choice(bot.responses['searching']))
+
+            # 2. 지식 베이스에서 관련 정보 검색
+            context = bot.search_knowledge(clean_query)
             
-            relevant_data, response_type = bot.search_knowledge(clean_query)
-            response, final_response_type = bot.generate_response(clean_query, relevant_data, response_type, user_id, channel_id)
-            say(response)
-            bot.log_question(clean_query, response, final_response_type)
+            # 3. 검색된 정보 바탕으로 최종 답변 생성
+            final_answer = bot.generate_final_answer(clean_query, context)
+
+            # 4. 슬랙에 최종 답변 전송 (기존 "생각 중" 메시지 수정)
+            app.client.chat_update(
+                channel=channel_id,
+                ts=thinking_message['ts'],
+                text=final_answer
+            )
             
     except Exception as e:
         logger.error(f"메시지 처리 실패: {e}", exc_info=True)
-        say(f"문제가 생겼어요. ⚠️\n잠시 후 다시 시도해주세요.")
-
-@app.message("피플AI 도움말")
-def handle_help(message, say):
-    user_id = message['user']
-    channel_id = message['channel']
-    greeting_prefix = _get_session_greeting(bot, user_id, channel_id)
-
-    help_text = """도움말을 알려드릴게요. ✨
-피플AI는 중고나라 직원들의 회사생활을 돕는 AI입니다.
-회사 정책, 복지, 절차 등을 질문하시면 빠르게 답변드립니다.
-
-📋 사용 예시:
-- `@피플AI 연차 신청 방법`
-- `#people-team-help` 채널에서: `택배 발송 절차는?`
-- DM으로: `How to book a meeting room?`
-
-📝 명령어:
-- `피플AI 모드변경`: 성격 변경 (프로/친구/해피)
-- `피플AI 오늘의팁`: 회사생활 팁
-- `피플AI 맛집추천`: 회사 근처 맛집
-- `피플AI 이벤트`: 사내 이벤트 확인
-
-더 궁금한 점이 있으시면 말씀해주세요.
-"""
-    response = greeting_prefix + help_text
-    say(response)
-
-@app.message("피플AI 모드변경")
-def change_mode(message, say):
-    user_id = message['user']
-    channel_id = message['channel']
-    greeting_prefix = _get_session_greeting(bot, user_id, channel_id)
-
-    personalities = list(bot.personalities.keys())
-    current_index = personalities.index(bot.current_personality)
-    next_index = (current_index + 1) % len(personalities)
-    bot.current_personality = personalities[next_index]
-    
-    new_mode_name = bot.personalities[bot.current_personality]['name']
-    
-    response_text = f"모드 변경이 완료되었습니다. ✅\n현재 모드는 {new_mode_name}입니다.\n어떤 도움을 드릴까요?\n"
-    response = greeting_prefix + response_text
-    say(response)
-
-@app.message("피플AI 오늘의팁")
-def daily_tip(message, say):
-    user_id = message['user']
-    channel_id = message['channel']
-    greeting_prefix = _get_session_greeting(bot, user_id, channel_id)
-
-    tips = [
-        "💡 이메일 제목은 명확히 작성하세요.\n예시: '회의' 대신 '3/15 마케팅 회의'로!",
-        "⏰ 회의 5분 전 입장하면 인상 좋아요.",
-        "💰 사내 식당 무료 뷔페를 꼭 이용하세요. 점심 식비 절약에 최고! 😋"
-    ]
-    
-    tip = random.choice(tips)
-    response_text = f"오늘의 팁을 드릴게요. 📋\n{tip}\n더 궁금한 점이 있으시면 말씀해주세요.\n"
-    response = greeting_prefix + response_text
-    say(response)
-
-@app.message("피플AI 맛집추천")
-def recommend_restaurant(message, say):
-    user_id = message['user']
-    channel_id = message['channel']
-    greeting_prefix = _get_session_greeting(bot, user_id, channel_id)
-
-    restaurants = [
-        "🍜 라멘집: 돈코츠 라멘 맛집 (도보 5분)",
-        "🍕 피자스쿨: 점심 특가 피자 (도보 3분)",
-        "🍱 한솥도시락: 간편한 도시락 (도보 2분)",
-        "☕ 스타벅스: 회의하기 좋은 카페 (도보 1분)"
-    ]
-    
-    recommended = '\n'.join(random.sample(restaurants, 2))
-    response_text = f"중고나라 근처 맛집을 추천드립니다. 🏢\n{recommended}\n더 궁금한 점이 있으시면 말씀해주세요.\n"
-    response = greeting_prefix + response_text
-    say(response)
-
-@app.message("피플AI 이벤트")
-def events(message, say):
-    user_id = message['user']
-    channel_id = message['channel']
-    greeting_prefix = _get_session_greeting(bot, user_id, channel_id)
-
-    today = datetime.now()
-    upcoming = [e for e in bot.events if datetime.strptime(e['date'], "%Y-%m-%d") >= today]
-
-    if upcoming:
-        event_list = [f"- {e['name']} ({e['date']}): {e['details']}" for e in upcoming]
-        event_list_str = '\n'.join(event_list)
-        response_text = f"다가오는 이벤트를 알려드립니다. 📅\n이벤트 목록:\n{event_list_str}\n더 궁금한 점이 있으시면 말씀해주세요.\n"
-    else:
-        response_text = """현재 예정된 이벤트는 없습니다. 😔
-새로운 이벤트가 생기면 빠르게 알려드릴게요!
-더 궁금한 점이 있으시면 말씀해주세요.
-"""
-    response = greeting_prefix + response_text
-    say(response)
+        say(f"앗, 예상치 못한 오류가 발생했어요. 😢\n잠시 후 다시 시도해주세요.")
 
 # --- Flask 라우팅 ---
 @flask_app.route("/slack/events", methods=["POST"])
