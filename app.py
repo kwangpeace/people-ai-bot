@@ -88,7 +88,7 @@ class PeopleAIBot:
         self.setup_key_info()
         self.setup_events()
         
-        # *** DB 자동 업데이트 로직 ***
+        # *** 수정된 부분: 봇 시작 시 항상 DB를 새로 구축하도록 변경 ***
         logger.info("DB 자동 업데이트를 위해 기존 ChromaDB 컬렉션을 삭제합니다.")
         try:
             self.chroma_client.delete_collection(name="junggonara_guide")
@@ -114,6 +114,7 @@ class PeopleAIBot:
                 logger.warning("가이드 텍스트 파일에서 유효한 텍스트 청크를 추출하지 못했습니다.")
         else:
             logger.error("가이드 텍스트 파일을 읽지 못해 DB를 구축할 수 없습니다.")
+
 
         self.question_log = []
         self.session_tracker = {}
@@ -165,4 +166,288 @@ class PeopleAIBot:
             "연치": "연차", "복리후셍": "복리후생", "회으실": "회의실",
             "택배실": "택배실", "결제": "결재", "급여명세서": "급여명세서"
         }
-        logger.info("OCR
+        logger.info("OCR 수정 맵 설정 완료.")
+    
+    def setup_key_info(self):
+        self.key_info = [
+            {"keywords": ["주소", "위치", "어디"], "answer": "✅ 우리 회사 주소는 '서울특별시 강남구 테헤란로 415, L7 HOTELS 강남타워 4층'입니다."},
+            {"keywords": ["와이파이", "wifi", "wi-fi", "인터넷"], "answer": "✅ 직원용 와이파이는 'joonggonara-5G'이며, 비밀번호는 'jn2023!@'입니다.\n✅ 방문객용은 'joonggonara-guest-5G'이며, 비밀번호는 'guest2023!@'입니다."},
+            {"keywords": ["택배마감", "택배 마감", "택배시간", "택배 시간"], "answer": "✅ 사내 택배 마감 시간은 평일 오후 1시입니다. 주말에는 수거하지 않으니 참고해주세요."},
+            {"keywords": ["웹사이트", "홈페이지", "블로그"], "answer": "✅ 중고나라 공식 웹사이트 주소는 다음과 같습니다:\n- 중고나라 서비스: https://www.joongna.com/\n- 중고나라 기술 블로그: https://teamblog.joonggonara.co.kr/"},
+            {"keywords": ["월급", "급여일"], "answer": "💰 급여일은 매월 말일입니다."},
+            {"keywords": ["연차", "휴가"], "answer": "✅ 연차휴가는 근속기간 기준으로 지급되며, 1시간 단위로도 사용할 수 있습니다.\n✨ 매월 0.5일의 특별 반차 '유즈해피'도 제공돼요! 더 자세한 휴가 종류(리프레시, 경조사 등)가 궁금하시면 구체적으로 질문해주세요."},
+            {"keywords": ["리프레시", "근속"], "answer": "✨ 매년 입사기념일을 맞이하면 근속 연차에 따라 2일에서 최대 10일까지의 리프레시 휴가와 선물이 지급됩니다!"},
+            {"keywords": ["유즈해피", "usehappy"], "answer": "✨ 매월 0.5일(4시간)의 특별 반차 휴가 '유즈해피'가 제공됩니다. 해당 월에 사용하지 않으면 소멸되니 잊지 말고 사용하세요!"},
+            {"keywords": ["민방위", "예비군"], "answer": "✅ 예비군/민방위 훈련은 플렉스(Flex)에서 '공가(예비군)'으로 신청하시면 유급 휴가로 처리됩니다. 담당자는 @이성헌 매니저입니다."},
+            {"keywords": ["피플팀 담당자", "담당자", "문의"], "answer": "📞 피플팀 문의 채널(#문의-피플팀)을 이용하시거나, 아래 담당자에게 직접 문의하실 수 있습니다:\n- 근태/휴가: 이성헌님\n- 계약/규정: 박지영님\n- 평가: 김광수님\n- 채용: 이성헌님\n- 계정(구글/슬랙): 박지영님\n- 장비/소프트웨어: 시현빈님\n- 급여/4대보험: 이동훈님, 박지영님"},
+            {"keywords": ["근태 담당자", "근태담당자", "근태 문의", "근무기록", "출퇴근 수정", "출근 체크"], "answer": "✅ Flex 근태, 휴가, 근무기록 수정 관련 문의는 @이성헌 매니저가 처리해드릴 거예요."},
+            {"keywords": ["계정 잠김", "계정 초대", "슬랙 계정"], "answer": "✅ 구글, 슬랙 등 업무 계정 관련 문의는 @박지영 매니저 또는 @시현빈 매니저가 처리해드릴 거예요."},
+            {"keywords": ["법인카드", "식대", "제로페이"], "answer": "✅ 점심식대는 개인 법인카드로 월 25만원, 야근 시 저녁식대는 제로페이로 1만원이 지원됩니다. 팀 운영비나 업무 교통비에 대해서도 궁금하시면 더 물어보세요!"},
+            {"keywords": ["카드 분실", "카드번호"], "answer": "✅ 법인카드 분실 시에는 즉시 하나카드 고객센터(1800-1111)에 분실 신고 후, 플렉스에서 재발급 신청을 해야 합니다. 자세한 문의는 재무회계팀(@이지영, @이소영)으로 해주세요."},
+            {"keywords": ["건강검진", "검진"], "answer": "✅ 매년 1회 KMI 한국의학연구소에서 종합 건강검진을 지원하고 있습니다. 자세한 예약 방법이나 대상자 확인이 필요하시면 말씀해주세요."},
+            {"keywords": ["도서", "책 신청", "다독다독"], "answer": "📚 '다독다독' 도서 지원 제도를 통해 매월 1인당 1권의 도서 구매를 지원합니다. @김정수 매니저가 처리해드릴 거예요."},
+            {"keywords": ["교육", "강의", "지식당"], "answer": "🎓 '지식당' 프로그램을 통해 자격증 응시료, 온라인/오프라인 교육 등을 지원하고 있습니다. 교육 구매 신청은 @김정수 매니저가 처리해드릴 거예요."},
+            {"keywords": ["추천", "보상금", "인재추천"], "answer": "💰 사내 인재 추천 제도를 통해 인재를 추천하고, 해당 인재가 입사하면 추천자와 입사자 모두에게 보상금이 지급됩니다. 직군과 레벨에 따라 금액이 달라져요!"},
+            {"keywords": ["재택", "재택근무"], "answer": "✅ 재택근무는 매주 수요일에 운영되며, 코어타임(10시~17시)은 동일하게 적용됩니다."},
+            {"keywords": ["장비", "고장", "교체", "노트북", "맥북", "모니터", "깜빡"], "answer": "💻 업무용 PC는 3년 주기로 교체되며, 장비 고장이나 기타 문의는 @시현빈 매니저가 처리해드릴 거예요."},
+            {"keywords": ["퀵", "계약서 전달"], "answer": "🛵 퀵 신청은 후다닥퀵(https://www.hudadaq.com/)을 이용하며, 자세한 방법은 @시현빈 매니저에게 문의해주세요."}
+        ]
+        logger.info("주요 정보(Key Info) 설정 완료.")
+
+    def setup_events(self):
+        self.events = [
+            {"name": "분기별 타운홀 미팅", "date": "2025-09-15", "details": "👥 전 직원 참여, 오후 2시 대회의실 🏢"},
+            {"name": "연말 파티", "date": "2025-12-20", "details": "🎉 사내 연말 행사, 드레스 코드: 캐주얼"}
+        ]
+        logger.info("이벤트 설정 완료.")
+
+    def split_text_into_chunks(self, text, max_length=1000, overlap=100):
+        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+        
+        chunks = []
+        for paragraph in paragraphs:
+            if len(paragraph) <= max_length:
+                chunks.append(paragraph)
+            else:
+                sentences = [s.strip() for s in paragraph.split('.') if s.strip()]
+                current_chunk = ""
+                for sentence in sentences:
+                    if len(current_chunk) + len(sentence) + 1 <= max_length:
+                        current_chunk += sentence + ". "
+                    else:
+                        chunks.append(current_chunk.strip())
+                        current_chunk = current_chunk[-overlap:] + sentence + ". "
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+        
+        return [chunk for chunk in chunks if len(chunk) > 50]
+
+    def is_question_pattern(self, text):
+        question_keywords = ["어떻게", "방법", "알려줘", "뭐야", "언제", "어디서", "누구", "연차", "회의실", "택배", "복리후생", "궁금"]
+        return any(keyword in text.lower() for keyword in question_keywords)
+
+    def detect_and_translate_language(self, text):
+        try:
+            detected = self.translator.detect(text)
+            if detected.lang != 'ko' and detected.lang != 'en':
+                translated_text = self.translator.translate(text, dest='ko').text
+                logger.info(f"'{detected.lang}' -> 'ko'로 번역됨. 원본: '{text[:20]}...', 번역: '{translated_text[:20]}...'")
+                return translated_text
+            return text
+        except Exception as e:
+            logger.error(f"언어 감지 또는 번역 실패: {e}", exc_info=True)
+            return text
+
+    def search_knowledge(self, query, n_results=5):
+        processed_query = self.detect_and_translate_language(query)
+        for wrong, correct in self.ocr_fixes.items():
+            processed_query = processed_query.replace(wrong, correct)
+        
+        for info in self.key_info:
+            for keyword in info["keywords"]:
+                if keyword in processed_query:
+                    logger.info(f"주요 정보에서 일치하는 키워드({keyword}) 발견.")
+                    return [info["answer"]], "key_info"
+
+        try:
+            context_docs = self.collection.query(
+                query_embeddings=self.embedding_model.encode([processed_query]).tolist(),
+                n_results=n_results
+            )
+            context = "\n\n".join(context_docs['documents'][0]) if context_docs and context_docs['documents'] else ""
+            logger.info(f"ChromaDB 검색 완료. 쿼리: {processed_query[:50]}... {n_results}개 결과 사용.")
+        except Exception as e:
+            logger.error(f"ChromaDB 검색 실패: {e}", exc_info=True)
+            context = ""
+
+        if self.use_gemini and context:
+            try:
+                prompt = self.gemini_prompt_template.format(query=processed_query, context=context)
+                gemini_response = self.gemini_model.generate_content(prompt)
+                
+                if gemini_response and hasattr(gemini_response, 'text') and gemini_response.text:
+                    logger.info(f"Gemini API 응답 성공. 쿼리: {processed_query[:50]}...")
+                    return [gemini_response.text], "gemini"
+                else:
+                    logger.warning(f"Gemini API 응답이 비어있거나 유효하지 않습니다. 응답: {gemini_response}")
+            except Exception as e:
+                logger.error(f"Gemini API 호출 실패: {e}", exc_info=True)
+        
+        return [], "not_found"
+
+    def generate_response(self, query, relevant_data, response_type, user_id, channel_id):
+        greeting = _get_session_greeting(self, user_id, channel_id)
+        
+        if response_type == "key_info":
+            response_text = relevant_data[0]
+            response = f"{greeting}{response_text}"
+        elif response_type == "gemini":
+            response_text = relevant_data[0]
+            response = f"{greeting}{response_text}"
+        else: # not_found
+            response_text = random.choice(self.responses['not_found'])
+            response = f"{greeting}{response_text}\n피플팀 담당자에게 문의해보시는 건 어떨까요? 📞"
+
+        return response, response_type
+
+    def log_question(self, query, response_text, response_type):
+        self.question_log.append({
+            "query": query,
+            "response": response_text,
+            "response_type": response_type,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "personality": self.current_personality
+        })
+        logger.info(f"질문 로그 기록: 쿼리='{query[:50]}...', 응답 타입='{response_type}'")
+
+# --- 봇 인스턴스 생성 ---
+bot = PeopleAIBot()
+
+# --- Slack 이벤트 핸들러 ---
+@app.message(".*")
+def handle_message(message, say):
+    try:
+        user_query = message['text']
+        channel_id = message['channel']
+        user_id = message['user']
+        
+        if message.get('user') == bot.bot_id:
+            return
+
+        auto_respond_channels_env = os.environ.get("AUTO_RESPOND_CHANNELS", "")
+        auto_respond_channels = [c.strip() for c in auto_respond_channels_env.split(',') if c.strip()]
+        
+        if (bot.bot_id and f"<@{bot.bot_id}>" in user_query or
+            message.get('channel_type') == 'im' or
+            (channel_id in auto_respond_channels and bot.is_question_pattern(user_query))):
+            
+            clean_query = user_query.replace(f"<@{bot.bot_id}>", "").strip() if bot.bot_id else user_query.strip()
+            
+            if not clean_query or len(clean_query) < 2:
+                logger.info(f"너무 짧거나 빈 쿼리 무시됨. 쿼리: '{clean_query}'")
+                return
+            
+            say(random.choice(bot.responses['searching']))
+            
+            relevant_data, response_type = bot.search_knowledge(clean_query)
+            response, final_response_type = bot.generate_response(clean_query, relevant_data, response_type, user_id, channel_id)
+            say(response)
+            bot.log_question(clean_query, response, final_response_type)
+            
+    except Exception as e:
+        logger.error(f"메시지 처리 실패: {e}", exc_info=True)
+        say(f"문제가 생겼어요. ⚠️\n잠시 후 다시 시도해주세요.")
+
+@app.message("피플AI 도움말")
+def handle_help(message, say):
+    user_id = message['user']
+    channel_id = message['channel']
+    greeting_prefix = _get_session_greeting(bot, user_id, channel_id)
+
+    help_text = """도움말을 알려드릴게요. ✨
+피플AI는 중고나라 직원들의 회사생활을 돕는 AI입니다.
+회사 정책, 복지, 절차 등을 질문하시면 빠르게 답변드립니다.
+
+📋 사용 예시:
+- `@피플AI 연차 신청 방법`
+- `#people-team-help` 채널에서: `택배 발송 절차는?`
+- DM으로: `How to book a meeting room?`
+
+📝 명령어:
+- `피플AI 모드변경`: 성격 변경 (프로/친구/해피)
+- `피플AI 오늘의팁`: 회사생활 팁
+- `피플AI 맛집추천`: 회사 근처 맛집
+- `피플AI 이벤트`: 사내 이벤트 확인
+
+더 궁금한 점이 있으시면 말씀해주세요.
+"""
+    response = greeting_prefix + help_text
+    say(response)
+
+@app.message("피플AI 모드변경")
+def change_mode(message, say):
+    user_id = message['user']
+    channel_id = message['channel']
+    greeting_prefix = _get_session_greeting(bot, user_id, channel_id)
+
+    personalities = list(bot.personalities.keys())
+    current_index = personalities.index(bot.current_personality)
+    next_index = (current_index + 1) % len(personalities)
+    bot.current_personality = personalities[next_index]
+    
+    new_mode_name = bot.personalities[bot.current_personality]['name']
+    
+    response_text = f"모드 변경이 완료되었습니다. ✅\n현재 모드는 {new_mode_name}입니다.\n어떤 도움을 드릴까요?\n"
+    response = greeting_prefix + response_text
+    say(response)
+
+@app.message("피플AI 오늘의팁")
+def daily_tip(message, say):
+    user_id = message['user']
+    channel_id = message['channel']
+    greeting_prefix = _get_session_greeting(bot, user_id, channel_id)
+
+    tips = [
+        "💡 이메일 제목은 명확히 작성하세요.\n예시: '회의' 대신 '3/15 마케팅 회의'로!",
+        "⏰ 회의 5분 전 입장하면 인상 좋아요.",
+        "💰 사내 식당 무료 뷔페를 꼭 이용하세요. 점심 식비 절약에 최고! 😋"
+    ]
+    
+    tip = random.choice(tips)
+    response_text = f"오늘의 팁을 드릴게요. 📋\n{tip}\n더 궁금한 점이 있으시면 말씀해주세요.\n"
+    response = greeting_prefix + response_text
+    say(response)
+
+@app.message("피플AI 맛집추천")
+def recommend_restaurant(message, say):
+    user_id = message['user']
+    channel_id = message['channel']
+    greeting_prefix = _get_session_greeting(bot, user_id, channel_id)
+
+    restaurants = [
+        "🍜 라멘집: 돈코츠 라멘 맛집 (도보 5분)",
+        "🍕 피자스쿨: 점심 특가 피자 (도보 3분)",
+        "🍱 한솥도시락: 간편한 도시락 (도보 2분)",
+        "☕ 스타벅스: 회의하기 좋은 카페 (도보 1분)"
+    ]
+    
+    recommended = '\n'.join(random.sample(restaurants, 2))
+    response_text = f"중고나라 근처 맛집을 추천드립니다. 🏢\n{recommended}\n더 궁금한 점이 있으시면 말씀해주세요.\n"
+    response = greeting_prefix + response_text
+    say(response)
+
+@app.message("피플AI 이벤트")
+def events(message, say):
+    user_id = message['user']
+    channel_id = message['channel']
+    greeting_prefix = _get_session_greeting(bot, user_id, channel_id)
+
+    today = datetime.now()
+    upcoming = [e for e in bot.events if datetime.strptime(e['date'], "%Y-%m-%d") >= today]
+
+    if upcoming:
+        event_list = [f"- {e['name']} ({e['date']}): {e['details']}" for e in upcoming]
+        event_list_str = '\n'.join(event_list)
+        response_text = f"다가오는 이벤트를 알려드립니다. 📅\n이벤트 목록:\n{event_list_str}\n더 궁금한 점이 있으시면 말씀해주세요.\n"
+    else:
+        response_text = """현재 예정된 이벤트는 없습니다. 😔
+새로운 이벤트가 생기면 빠르게 알려드릴게요!
+더 궁금한 점이 있으시면 말씀해주세요.
+"""
+    response = greeting_prefix + response_text
+    say(response)
+
+# --- Flask 라우팅 ---
+@flask_app.route("/slack/events", methods=["POST"])
+def slack_events():
+    return handler.handle(request)
+
+@flask_app.route("/", methods=["GET"])
+def health_check():
+    return "피플AI 정상 작동중! 🟢"
+
+# --- 앱 실행 ---
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 3000))
+    logger.info(f"Flask 앱을 포트 {port}에서 실행합니다.")
+    flask_app.run(host="0.0.0.0", port=port)
