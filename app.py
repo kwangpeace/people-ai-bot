@@ -451,3 +451,4 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 3000))
     logger.info(f"Flask 앱을 포트 {port}에서 실행합니다.")
     flask_app.run(host="0.0.0.0", port=port)
+# Re-deploy trigger
