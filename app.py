@@ -61,60 +61,65 @@ class PeopleAIBot:
             logger.info("Gemini API 비활성화.")
 
         self.gemini_prompt_template = """
-당신은 '중고나라'의 친절한 AI 동료 '피플AI'입니다. 당신의 임무는 제공된 '참고 자료'만을 사용하여 동료의 질문에 답변하는 것입니다.
+[당신의 역할]
+당신은 '중고나라' 회사의 피플팀(People Team) 소속의 AI 어시스턴트입니다. 당신의 이름은 '피플 AI'이며, 동료 직원들에게 회사 생활과 관련된 다양한 정보를 친절하고 정확하게 안내하는 것이 당신의 주된 임무입니다. 당신은 매우 유능하며, 동료들을 돕는 것을 중요하게 생각합니다.
+[주요 임무]
+정보 제공: 동료 '중고나라' 직원들이 회사 정책, 복지, 내부 절차, 조직 문화 등 회사 전반에 대해 질문하면, 당신에게 제공된 '참고 자료'에 근거하여 명확하고 이해하기 쉽게 답변해야 합니다.
+문맥 이해: 직원들이 대화 중에 '우리 회사', '우리 팀', '우리' 또는 이와 유사한 표현을 사용할 경우, 이는 항상 '중고나라' 회사를 지칭하는 것으로 이해하고 대화해야 합니다.
 
-**핵심 규칙:**
-1.  **자료 기반 답변:** 답변은 반드시 '참고 자료' 내용에만 근거해야 합니다. 자료에 없는 내용은 절대로 추측하거나 외부 지식을 사용해 답변하지 마세요.
-2.  **슬랙 형식 준수:**
-    -   핵심 답변을 2~3줄로 먼저 제시하세요.
-    -   모든 문장("~다.", "~요." 등) 끝에는 반드시 줄바꿈을 추가하여 가독성을 높여주세요.
-    -   항목을 나열할 때는 글머리 기호(-)나 번호 매기기(1., 2.)를 사용하세요.
-    -   텍스트를 굵게(**) 만들지 마세요.
-3.  **모를 경우:** 참고 자료에서 명확한 답을 찾을 수 없다면, "음, 문의주신 부분에 대해서는 제가 지금 바로 명확한 답변을 드리기는 조금 어렵네요." 와 같이 부드럽게 말하고 피플팀 문의를 안내하세요.
-
-**대화 시작:**
--   대화가 처음 시작될 때만 "안녕하세요!" 같은 인사를 사용하세요.
+[답변 생성 시 추가 가이드라인]
+정보 출처의 절대성 (매우 중요한 규칙)
+당신의 모든 답변은 (필수) 반드시 당신에게 제공된 '참고 자료'의 내용에만 근거해야 합니다. 이 규칙은 절대적이며, 당신의 일반 지식이나 외부 정보는 절대로 사용되어서는 안 됩니다. '참고 자료'를 철저히 분석하여, 사용자의 질문에 가장 정확한 답변을 찾아내세요.
+소통 스타일 (지침)
+동료 직원을 대하는 것처럼, 전반적으로 친절하고 부드러운 어투를 사용해주세요. 답변이 기계적이거나 지나치게 정형화되지 않도록, 실제 사람이 대화하는 것처럼 더욱 자연스러운 흐름을 유지해주세요. 사용자의 상황에 공감하는 따뜻한 느낌을 전달하되, 답변의 명확성과 간결함이 우선시되어야 합니다. 지나치게 사무적이거나 딱딱한 말투는 피해주시고, 긍정적이고 협조적인 태도를 보여주세요. 핵심은 전문성을 유지하면서도 사용자가 편안하게 정보를 얻고 소통할 수 있도록 돕는 것입니다.
+명료성 (지침)
+답변은 명확하고 간결해야 합니다. 직원들이 쉽게 이해할 수 있도록 필요한 경우 부연 설명을 할 수 있지만, 이 부연 설명 역시 '참고 자료'에 근거해야 하며, 당신의 추측이나 외부 지식을 추가해서는 안 됩니다.
+언어 (지침)
+모든 답변은 자연스러운 한국어로 제공해야 합니다.
+가독성 높은 답변 형식 (매우 중요한 지침)
+1. 슬랙 최적화된 답변 구조 (매우 중요)
+첫 답변은 핵심 정보만 2-3줄로 간단히 제공하고, 긴 설명이나 상세 정보는 "더 자세한 내용이 필요하시면 말씀해주세요!" 형태로 추가 질문을 유도합니다.
+2. 문장 나누기 규칙 (슬랙 가독성 - 필수 준수)
+모든 문장 끝("~습니다.", "~됩니다.", "~세요.", "~요." 등) 뒤에는 반드시 한 번의 줄바꿈을 해야 합니다. 한 줄에 하나의 완전한 문장만 작성합니다.
+3. 항목화된 정보 제공 (세부 지침)
+순서나 절차가 중요하면 번호 매기기(1., 2., 3.)를, 그렇지 않으면 글머리 기호(- 또는 *)를 사용합니다.
+4. 텍스트 강조 사용 금지 (가장 엄격하게 지켜야 할 규칙)
+답변의 어떤 부분에서도 텍스트를 굵게 만드는 마크다운 형식(예: **단어**)을 절대로 사용해서는 안 됩니다.
+5. 시각적 구분자 활용 (슬랙 최적화)
+다음 이모지들을 상황에 맞게 매우 제한적으로 활용하여 정보의 성격을 시각적으로 구분해주세요: ✅, ❌, 🔄, ⏰, 📅, 📋, 💡, ⚠️, 📞, 🔗, ✨, 📝, 💰, 🏢, 👥. 감정 표현 이모지는 절대 사용하지 마세요.
+인사 규칙 (매우 중요):
+첫 번째 질문에만 "안녕하세요!" 인사를 사용하고, 같은 대화 세션 내 추가 질문에는 인사 없이 바로 답변을 시작합니다.
+만약 '참고 자료'에서 정보를 찾을 수 없으면, "음, 문의주신 부분에 대해서는 제가 지금 바로 명확한 답변을 드리기는 조금 어렵네요." 와 같이 부드럽게 답변하고, 피플팀 문의를 안내합니다.
 
 질문: {query}
-참고 자료:
----
-{context}
----
+참고 자료: {context}
 """
         self.setup_chroma_db()
         self.setup_personalities()
         self.setup_responses()
         self.setup_ocr_fixes()
-        self.setup_key_info()
         self.setup_events()
         
-        # *** 수정된 부분: 봇 시작 시 항상 DB를 새로 구축하도록 변경 ***
-        logger.info("DB 자동 업데이트를 위해 기존 ChromaDB 컬렉션을 삭제합니다.")
-        try:
-            self.chroma_client.delete_collection(name="junggonara_guide")
-            logger.info("기존 ChromaDB 컬렉션을 성공적으로 삭제했습니다.")
-        except Exception as e:
-            logger.warning(f"기존 ChromaDB 컬렉션 삭제 중 오류 발생 (초기 실행 시 정상): {e}")
-        
-        self.collection = self.chroma_client.get_or_create_collection(name="junggonara_guide")
-        logger.info("최신 가이드 데이터로 ChromaDB를 새로 구축합니다.")
-        text = self.load_local_text_data()
-        if text:
-            text_chunks = self.split_text_into_chunks(text)
-            if text_chunks:
-                embeddings = self.embedding_model.encode(text_chunks)
-                self.collection.add(
-                    documents=text_chunks,
-                    embeddings=embeddings.tolist(),
-                    ids=[f"chunk_{i}" for i in range(len(text_chunks))],
-                    metadatas=[{"source": "로컬 가이드 텍스트 파일", "chunk_id": i} for i in range(len(text_chunks))]
-                )
-                logger.info(f"최신 데이터로 ChromaDB 구축 완료: {len(text_chunks)}개 청크 추가됨.")
-            else:
-                logger.warning("가이드 텍스트 파일에서 유효한 텍스트 청크를 추출하지 못했습니다.")
+        # ChromaDB 초기화 및 데이터 로딩
+        # *** 중요: DB를 새로 만들려면 서버에서 chroma_db 폴더를 삭제해야 합니다. ***
+        if self.collection.count() == 0:
+            logger.info("ChromaDB 컬렉션이 비어있어 로컬 텍스트 파일 데이터를 로드합니다.")
+            text = self.load_local_text_data()
+            if text:
+                text_chunks = self.split_text_into_chunks(text)
+                if text_chunks:
+                    embeddings = self.embedding_model.encode(text_chunks)
+                    self.collection.add(
+                        documents=text_chunks,
+                        embeddings=embeddings.tolist(),
+                        ids=[f"chunk_{i}" for i in range(len(text_chunks))],
+                        metadatas=[{"source": "로컬 가이드 텍스트 파일", "chunk_id": i} for i in range(len(text_chunks))]
+                    )
+                    logger.info(f"로컬 텍스트 데이터 로드 완료: {len(text_chunks)}개 청크 추가됨.")
+                else:
+                    logger.warning("로컬 텍스트 파일에서 유효한 텍스트 청크를 추출하지 못했습니다.")
         else:
-            logger.error("가이드 텍스트 파일을 읽지 못해 DB를 구축할 수 없습니다.")
-
+            logger.info("ChromaDB 컬렉션에 이미 데이터가 존재하여 로컬 파일 로드를 건너뜁니다.")
 
         self.question_log = []
         self.session_tracker = {}
@@ -137,6 +142,10 @@ class PeopleAIBot:
     def setup_chroma_db(self):
         db_path = os.environ.get("CHROMA_DB_PATH", "./chroma_db")
         self.chroma_client = chromadb.PersistentClient(path=db_path)
+        self.collection = self.chroma_client.get_or_create_collection(
+            name="junggonara_guide",
+            metadata={"description": "중고나라 회사 가이드 데이터"}
+        )
         self.embedding_model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
         logger.info(f"ChromaDB({db_path}) 및 SentenceTransformer 설정 완료.")
 
@@ -167,32 +176,6 @@ class PeopleAIBot:
             "택배실": "택배실", "결제": "결재", "급여명세서": "급여명세서"
         }
         logger.info("OCR 수정 맵 설정 완료.")
-    
-    def setup_key_info(self):
-        self.key_info = [
-            {"keywords": ["주소", "위치", "어디"], "answer": "✅ 우리 회사 주소는 '서울특별시 강남구 테헤란로 415, L7 HOTELS 강남타워 4층'입니다."},
-            {"keywords": ["와이파이", "wifi", "wi-fi", "인터넷"], "answer": "✅ 직원용 와이파이는 'joonggonara-5G'이며, 비밀번호는 'jn2023!@'입니다.\n✅ 방문객용은 'joonggonara-guest-5G'이며, 비밀번호는 'guest2023!@'입니다."},
-            {"keywords": ["택배마감", "택배 마감", "택배시간", "택배 시간"], "answer": "✅ 사내 택배 마감 시간은 평일 오후 1시입니다. 주말에는 수거하지 않으니 참고해주세요."},
-            {"keywords": ["웹사이트", "홈페이지", "블로그"], "answer": "✅ 중고나라 공식 웹사이트 주소는 다음과 같습니다:\n- 중고나라 서비스: https://www.joongna.com/\n- 중고나라 기술 블로그: https://teamblog.joonggonara.co.kr/"},
-            {"keywords": ["월급", "급여일"], "answer": "💰 급여일은 매월 말일입니다."},
-            {"keywords": ["연차", "휴가"], "answer": "✅ 연차휴가는 근속기간 기준으로 지급되며, 1시간 단위로도 사용할 수 있습니다.\n✨ 매월 0.5일의 특별 반차 '유즈해피'도 제공돼요! 더 자세한 휴가 종류(리프레시, 경조사 등)가 궁금하시면 구체적으로 질문해주세요."},
-            {"keywords": ["리프레시", "근속"], "answer": "✨ 매년 입사기념일을 맞이하면 근속 연차에 따라 2일에서 최대 10일까지의 리프레시 휴가와 선물이 지급됩니다!"},
-            {"keywords": ["유즈해피", "usehappy"], "answer": "✨ 매월 0.5일(4시간)의 특별 반차 휴가 '유즈해피'가 제공됩니다. 해당 월에 사용하지 않으면 소멸되니 잊지 말고 사용하세요!"},
-            {"keywords": ["민방위", "예비군"], "answer": "✅ 예비군/민방위 훈련은 플렉스(Flex)에서 '공가(예비군)'으로 신청하시면 유급 휴가로 처리됩니다. 담당자는 @이성헌 매니저입니다."},
-            {"keywords": ["피플팀 담당자", "담당자", "문의"], "answer": "📞 피플팀 문의 채널(#문의-피플팀)을 이용하시거나, 아래 담당자에게 직접 문의하실 수 있습니다:\n- 근태/휴가: 이성헌님\n- 계약/규정: 박지영님\n- 평가: 김광수님\n- 채용: 이성헌님\n- 계정(구글/슬랙): 박지영님\n- 장비/소프트웨어: 시현빈님\n- 급여/4대보험: 이동훈님, 박지영님"},
-            {"keywords": ["근태 담당자", "근태담당자", "근태 문의", "근무기록", "출퇴근 수정", "출근 체크"], "answer": "✅ Flex 근태, 휴가, 근무기록 수정 관련 문의는 @이성헌 매니저가 처리해드릴 거예요."},
-            {"keywords": ["계정 잠김", "계정 초대", "슬랙 계정"], "answer": "✅ 구글, 슬랙 등 업무 계정 관련 문의는 @박지영 매니저 또는 @시현빈 매니저가 처리해드릴 거예요."},
-            {"keywords": ["법인카드", "식대", "제로페이"], "answer": "✅ 점심식대는 개인 법인카드로 월 25만원, 야근 시 저녁식대는 제로페이로 1만원이 지원됩니다. 팀 운영비나 업무 교통비에 대해서도 궁금하시면 더 물어보세요!"},
-            {"keywords": ["카드 분실", "카드번호"], "answer": "✅ 법인카드 분실 시에는 즉시 하나카드 고객센터(1800-1111)에 분실 신고 후, 플렉스에서 재발급 신청을 해야 합니다. 자세한 문의는 재무회계팀(@이지영, @이소영)으로 해주세요."},
-            {"keywords": ["건강검진", "검진"], "answer": "✅ 매년 1회 KMI 한국의학연구소에서 종합 건강검진을 지원하고 있습니다. 자세한 예약 방법이나 대상자 확인이 필요하시면 말씀해주세요."},
-            {"keywords": ["도서", "책 신청", "다독다독"], "answer": "📚 '다독다독' 도서 지원 제도를 통해 매월 1인당 1권의 도서 구매를 지원합니다. @김정수 매니저가 처리해드릴 거예요."},
-            {"keywords": ["교육", "강의", "지식당"], "answer": "🎓 '지식당' 프로그램을 통해 자격증 응시료, 온라인/오프라인 교육 등을 지원하고 있습니다. 교육 구매 신청은 @김정수 매니저가 처리해드릴 거예요."},
-            {"keywords": ["추천", "보상금", "인재추천"], "answer": "💰 사내 인재 추천 제도를 통해 인재를 추천하고, 해당 인재가 입사하면 추천자와 입사자 모두에게 보상금이 지급됩니다. 직군과 레벨에 따라 금액이 달라져요!"},
-            {"keywords": ["재택", "재택근무"], "answer": "✅ 재택근무는 매주 수요일에 운영되며, 코어타임(10시~17시)은 동일하게 적용됩니다."},
-            {"keywords": ["장비", "고장", "교체", "노트북", "맥북", "모니터", "깜빡"], "answer": "💻 업무용 PC는 3년 주기로 교체되며, 장비 고장이나 기타 문의는 @시현빈 매니저가 처리해드릴 거예요."},
-            {"keywords": ["퀵", "계약서 전달"], "answer": "🛵 퀵 신청은 후다닥퀵(https://www.hudadaq.com/)을 이용하며, 자세한 방법은 @시현빈 매니저에게 문의해주세요."}
-        ]
-        logger.info("주요 정보(Key Info) 설정 완료.")
 
     def setup_events(self):
         self.events = [
@@ -201,14 +184,19 @@ class PeopleAIBot:
         ]
         logger.info("이벤트 설정 완료.")
 
+    # *** 수정된 부분: 데이터 분할 로직 개선 ***
     def split_text_into_chunks(self, text, max_length=1000, overlap=100):
+        """의미 단위(문단)를 유지하며 텍스트를 청크로 나눕니다."""
+        # 빈 줄을 기준으로 문단을 나눕니다.
         paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
         
         chunks = []
         for paragraph in paragraphs:
+            # 문단이 최대 길이보다 짧으면 그대로 청크로 사용합니다.
             if len(paragraph) <= max_length:
                 chunks.append(paragraph)
             else:
+                # 문단이 길면, 문장 단위로 나누어 최대 길이를 넘지 않게 청크를 만듭니다.
                 sentences = [s.strip() for s in paragraph.split('.') if s.strip()]
                 current_chunk = ""
                 for sentence in sentences:
@@ -216,11 +204,12 @@ class PeopleAIBot:
                         current_chunk += sentence + ". "
                     else:
                         chunks.append(current_chunk.strip())
+                        # 이전 청크의 끝부분을 포함하여 문맥을 유지합니다 (overlap).
                         current_chunk = current_chunk[-overlap:] + sentence + ". "
                 if current_chunk:
                     chunks.append(current_chunk.strip())
         
-        return [chunk for chunk in chunks if len(chunk) > 50]
+        return [chunk for chunk in chunks if len(chunk) > 50] # 너무 짧은 청크는 제외
 
     def is_question_pattern(self, text):
         question_keywords = ["어떻게", "방법", "알려줘", "뭐야", "언제", "어디서", "누구", "연차", "회의실", "택배", "복리후생", "궁금"]
@@ -238,29 +227,26 @@ class PeopleAIBot:
             logger.error(f"언어 감지 또는 번역 실패: {e}", exc_info=True)
             return text
 
+    # *** 수정된 부분: 검색 범위 확장 (n_results=5) ***
     def search_knowledge(self, query, n_results=5):
+        """사용자 질문에 대해 ChromaDB와 Gemini를 사용해 답변을 검색하고 생성합니다."""
         processed_query = self.detect_and_translate_language(query)
         for wrong, correct in self.ocr_fixes.items():
             processed_query = processed_query.replace(wrong, correct)
         
-        for info in self.key_info:
-            for keyword in info["keywords"]:
-                if keyword in processed_query:
-                    logger.info(f"주요 정보에서 일치하는 키워드({keyword}) 발견.")
-                    return [info["answer"]], "key_info"
-
         try:
             context_docs = self.collection.query(
                 query_embeddings=self.embedding_model.encode([processed_query]).tolist(),
                 n_results=n_results
             )
+            # 검색된 여러 조각을 하나의 큰 참고 자료로 합칩니다.
             context = "\n\n".join(context_docs['documents'][0]) if context_docs and context_docs['documents'] else ""
             logger.info(f"ChromaDB 검색 완료. 쿼리: {processed_query[:50]}... {n_results}개 결과 사용.")
         except Exception as e:
             logger.error(f"ChromaDB 검색 실패: {e}", exc_info=True)
             context = ""
 
-        if self.use_gemini and context:
+        if self.use_gemini:
             try:
                 prompt = self.gemini_prompt_template.format(query=processed_query, context=context)
                 gemini_response = self.gemini_model.generate_content(prompt)
@@ -273,18 +259,21 @@ class PeopleAIBot:
             except Exception as e:
                 logger.error(f"Gemini API 호출 실패: {e}", exc_info=True)
         
+        if context:
+            return [context], "chroma"
+        
         return [], "not_found"
 
     def generate_response(self, query, relevant_data, response_type, user_id, channel_id):
         greeting = _get_session_greeting(self, user_id, channel_id)
         
-        if response_type == "key_info":
+        if response_type == "gemini":
             response_text = relevant_data[0]
             response = f"{greeting}{response_text}"
-        elif response_type == "gemini":
-            response_text = relevant_data[0]
-            response = f"{greeting}{response_text}"
-        else: # not_found
+        elif response_type == "chroma":
+            context = relevant_data[0]
+            response = f"{greeting}✅ 관련 정보를 찾았습니다:\n{context}\n더 궁금한 점이 있으시면 말씀해주세요."
+        else:
             response_text = random.choice(self.responses['not_found'])
             response = f"{greeting}{response_text}\n피플팀 담당자에게 문의해보시는 건 어떨까요? 📞"
 
