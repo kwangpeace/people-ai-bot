@@ -38,8 +38,6 @@ class PeopleAIBot:
         self.gemini_model = self.setup_gemini()
         self.knowledge_base = self.load_knowledge_file()
         self.responses = { "searching": ["잠시만요, 관련 정보를 찾고 있어요... 🕵️‍♀️", "생각하는 중... 🤔"] }
-        # 세션별 첫 인사 관리를 위한 딕셔너리
-        self.session_tracker = {}
 
     def setup_gemini(self):
         gemini_api_key = os.environ.get("GEMINI_API_KEY")
@@ -68,17 +66,10 @@ class PeopleAIBot:
             logger.error(f"지식 파일 로드 중 오류: {e}")
             return ""
 
-    def generate_answer(self, query, user_id, channel_id):
+    def generate_answer(self, query):
         if not self.gemini_model: return "AI 모델이 설정되지 않아 답변할 수 없습니다."
         if not self.knowledge_base: return "지식 파일이 비어있어 답변할 수 없습니다."
         
-        # 세션 확인 및 인사말 추가
-        session_key = (user_id, channel_id)
-        greeting = ""
-        if session_key not in self.session_tracker:
-            greeting = "안녕하세요!\n"
-            self.session_tracker[session_key] = True
-
         prompt = f"""
 [당신의 역할]
 당신은 '중고나라' 회사의 피플팀 AI 어시스턴트 '피플AI'입니다. 동료 직원들에게 회사 생활 정보를 친절하고 정확하게 안내하는 것이 당신의 주된 임무입니다. 당신은 매우 유능하며, 동료들을 돕는 것을 중요하게 생각합니다.
@@ -109,72 +100,86 @@ class PeopleAIBot:
 - 시각적 구분자(이모지) 활용: ✅, ❌, 🔄, ⏰, 📅, 📋, 💡, ⚠️, 📞, 🔗, ✨, 📝, 💰, 🏢, 👥 와 같은 정보 구분용 이모지만 제한적으로 사용하고, 감정 표현 이모지는 절대 사용하지 마세요.
 
 5. 기타 규칙
-- 인사 규칙: {greeting}
 - 정보 출처 언급 금지: 답변 시 "참고 자료에 따르면" 과 같은 표현을 사용하지 말고, 당신이 이미 알고 있는 지식처럼 자연스럽게 설명해야 합니다.
 
 ---
 [참고 자료]
 {self.knowledge_base}
 ---
-
 [질문]
 {query}
-
 [답변]
 """
         try:
             response = self.gemini_model.generate_content(prompt)
-            final_response_text = greeting + response.text if greeting else response.text
             logger.info(f"Gemini 답변 생성 성공. (쿼리: {query[:30]}...)")
-            return final_response_text
+            return response.text
         except Exception as e:
             logger.error(f"Gemini API 호출 실패: {e}", exc_info=True)
             return "AI 답변 생성 중 오류가 발생했습니다."
 
 bot = PeopleAIBot()
 
-# --- Slack 이벤트 핸들러 (모든 규칙이 적용된 최종 버전) ---
+# --- Slack 이벤트 핸들러 (도움말 예시 변경 및 인사 규칙 삭제) ---
 @app.event("message")
 def handle_all_message_events(body, say, logger):
     try:
         event = body["event"]
         user_id = event.get("user")
         
-        # 1. 봇 자신이 보낸 메시지, 채널 참여/퇴장 등 시스템 메시지는 무조건 무시
         if "subtype" in event or (bot.bot_id and user_id == bot.bot_id):
             return
 
         channel_id = event.get("channel")
         text = event.get("text", "")
-        thread_ts = event.get("thread_ts") # 스레드 안의 메시지인지 확인하는 키
-        message_ts = event.get("ts") # 현재 메시지의 고유 타임스탬프
+        thread_ts = event.get("thread_ts")
+        message_ts = event.get("ts")
         
-        # 2. 스레드 안에서의 대화인지(thread_ts가 있는지) 확인
+        # '도움말' 명령어 처리
+        if text.strip() == "도움말":
+            logger.info(f"'{user_id}' 사용자가 도움말을 요청했습니다.")
+            help_text = """안녕하세요! 저는 중고나라 피플팀의 AI 어시스턴트, *피플AI*입니다. 🤖
+회사 생활과 관련된 다양한 정보(복지, 휴가, 업무 절차, 시설 안내 등)에 대해 질문해주시면 신속하게 답변해 드려요.
+
+*📋 피플AI 사용법 안내*
+
+*1. 질문하기*
+- DM(개인 메시지)과 채널에서 멘션 없이 편하게 질문해주세요.
+- 제 답변은 항상 질문에 대한 스레드(댓글)로 달립니다.
+
+*2. 스레드에서 추가 질문하기*
+- 저는 스레드에서 오가는 일반 대화에는 참여하지 않아요.
+- 하지만 스레드 안에서 `@피플AI`로 저를 다시 불러주시면, 그 질문에는 이어서 답변해 드립니다!
+
+*💡 예시 질문*
+- "플레이북 링크 주소를 알려줘"
+- "모니터가 안나오는데 피플팀 담당자는 누구야?"
+- "이전 직장 동료를 사내 추천하려면 어떻게 해?"
+"""
+            reply_ts = thread_ts if thread_ts else message_ts
+            say(text=help_text, thread_ts=reply_ts)
+            return
+
+        # 스레드 안에서의 대화 처리
         if thread_ts:
-            # 2a. 스레드 안에서는 멘션될 때만 응답
             if f"<@{bot.bot_id}>" in text:
                 logger.info("스레드 내에서 멘션을 감지하여 응답합니다.")
                 clean_query = text.replace(f"<@{bot.bot_id}>", "").strip()
+                if not clean_query: return
                 
-                if not clean_query or len(clean_query) < 2: return
-
-                # 기존 스레드에 이어서 답변
                 thinking_message = say(text=random.choice(bot.responses['searching']), thread_ts=thread_ts)
-                final_answer = bot.generate_answer(clean_query, user_id, channel_id)
+                final_answer = bot.generate_answer(clean_query)
                 app.client.chat_update(channel=channel_id, ts=thinking_message['ts'], text=final_answer)
             else:
-                # 2b. 스레드 내에서 멘션이 없으면 무시
-                return
+                return # 멘션 없으면 무시
+        # 새로운 메시지 처리
         else:
-            # 3. 스레드가 아닌 새로운 메시지 (채널/DM 모두 해당)는 항상 응답
             logger.info("새로운 메시지를 감지했습니다. 스레드를 시작하며 답변합니다.")
             clean_query = text.strip()
-            
             if not clean_query or len(clean_query) < 2: return
 
-            # 새로운 스레드를 시작하며 답변 (thread_ts에 message_ts를 사용)
             thinking_message = say(text=random.choice(bot.responses['searching']), thread_ts=message_ts)
-            final_answer = bot.generate_answer(clean_query, user_id, channel_id)
+            final_answer = bot.generate_answer(clean_query)
             app.client.chat_update(channel=channel_id, ts=thinking_message['ts'], text=final_answer)
 
     except Exception as e:
@@ -185,7 +190,7 @@ def handle_all_message_events(body, say, logger):
 def slack_events(): return handler.handle(request)
 
 @flask_app.route("/", methods=["GET"])
-def health_check(): return "피플AI (채널 참여 모드) 정상 작동중! 🟢"
+def health_check(): return "피플AI (최종 버전) 정상 작동중! 🟢"
 
 # --- 앱 실행 ---
 if __name__ == "__main__":
