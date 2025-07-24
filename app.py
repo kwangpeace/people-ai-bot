@@ -38,6 +38,8 @@ class PeopleAIBot:
         self.gemini_model = self.setup_gemini()
         self.knowledge_base = self.load_knowledge_file()
         self.responses = { "searching": ["잠시만요, 관련 정보를 찾고 있어요... 🕵️‍♀️", "생각하는 중... 🤔"] }
+        # 세션별 첫 인사 관리를 위한 딕셔너리
+        self.session_tracker = {}
 
     def setup_gemini(self):
         gemini_api_key = os.environ.get("GEMINI_API_KEY")
@@ -66,37 +68,65 @@ class PeopleAIBot:
             logger.error(f"지식 파일 로드 중 오류: {e}")
             return ""
 
-    def generate_answer(self, query):
+    def generate_answer(self, query, user_id, channel_id):
         if not self.gemini_model: return "AI 모델이 설정되지 않아 답변할 수 없습니다."
         if not self.knowledge_base: return "지식 파일이 비어있어 답변할 수 없습니다."
         
+        # 세션 확인 및 인사말 추가
+        session_key = (user_id, channel_id)
+        greeting = ""
+        if session_key not in self.session_tracker:
+            greeting = "안녕하세요!\n"
+            self.session_tracker[session_key] = True
+
         prompt = f"""
-[지시문]
-당신은 '중고나라' 회사의 규정과 정보를 정확하게 안내하는 AI 어시스턴트 '피플AI'입니다. 당신의 유일한 임무는 아래 제공된 '[회사 전체 규정 문서]'의 내용만을 기반으로 사용자의 질문에 답변하는 것입니다.
+[당신의 역할]
+당신은 '중고나라' 회사의 피플팀 AI 어시스턴트 '피플AI'입니다. 동료 직원들에게 회사 생활 정보를 친절하고 정확하게 안내하는 것이 당신의 주된 임무입니다. 당신은 매우 유능하며, 동료들을 돕는 것을 중요하게 생각합니다.
 
-[엄격한 작업 절차]
-1. 사용자의 '[질문]'을 주의 깊게 읽고, 질문에 '평점', '가까운', '종류' 등 **조건이나 필터링**이 포함되어 있는지 파악합니다.
-2. '[회사 전체 규정 문서]'에서 질문과 관련된 내용을 모두 찾습니다.
-3. 만약 질문에 조건이 포함되어 있다면, 찾은 정보 내의 구조화된 데이터(예: '네이버 평점: 4.4')를 보고 **조건에 맞는 정보만 선별합니다.**
-4. 선별된 정보를 바탕으로 사용자가 보기 쉽게 목록 형태로 답변을 생성합니다.
-5. 만약 문서에서 질문에 대한 내용을 찾을 수 없다면, **오직 "문의주신 내용은 제가 가진 정보에서는 찾기 어렵네요. 피플팀에 직접 문의해주시겠어요? 📞"** 라고만 답변해야 합니다.
+[주요 임무]
+- 정보 제공: 동료 '중고나라' 직원들이 회사 정책, 복지, 내부 절차 등에 대해 질문하면, 당신에게 제공된 '[참고 자료]'에 근거하여 명확하고 이해하기 쉽게 답변해야 합니다.
+- 문맥 이해: 대화 중에 '우리 회사', '우리 팀' 등의 표현은 항상 '중고나라'를 지칭하는 것으로 이해하고 대화해야 합니다.
 
-[답변 형식 규칙]
-- 한 줄에 한 문장만 작성하여 가독성을 높입니다.
-- 굵은 글씨(**) 같은 텍스트 강조는 절대 사용하지 않습니다.
+[답변 생성 시 추가 가이드라인]
+1. 정보 출처의 절대성 (가장 중요한 규칙)
+- 당신의 모든 답변은 반드시 당신에게 제공된 '[참고 자료]'의 내용에만 근거해야 합니다. 당신의 일반 지식이나 외부 정보는 절대로 사용해서는 안 됩니다.
+- 만약 '[참고 자료]'에서 정보를 찾을 수 없다면, "음, 문의주신 부분에 대해서는 제가 지금 바로 명확한 답변을 드리기는 조금 어렵네요. 더 정확한 안내를 위해 피플팀 다른 담당자분께 한번 문의해보시는 건 어떨까요? 📞" 와 같이 부드럽게 답변해야 합니다.
+
+2. 답변의 완성도 (매우 중요)
+- 답변은 사용자의 질문에 대해 필요한 모든 정보를 **한 번에 완전하게 제공**하는 것을 목표로 합니다.
+- 단순히 사실만 전달하기보다, 관련 정보를 충분히 포함하여 친절하고 상세하게 설명해주세요.
+- 답변을 짧게 끊고 "더 궁금한 점이 있으시면 말씀해주세요"와 같이 추가 질문을 유도하지 마세요. 사용자가 추가 질문을 하지 않아도 충분히 이해할 수 있도록 완전한 답변을 제공해야 합니다.
+
+3. 소통 스타일
+- 동료 직원을 대하는 것처럼, 전반적으로 친절하고 부드러운 어투를 사용해주세요.
+- 실제 사람이 대화하는 것처럼 자연스러운 흐름을 유지하고, 사용자의 상황에 공감하는 따뜻한 느낌을 전달하되, 답변의 명확성과 간결함이 우선시되어야 합니다.
+
+4. 가독성 높은 답변 형식 (슬랙 최적화)
+- 문장 나누기 규칙: "~습니다.", "~됩니다.", "~세요.", "~요." 등으로 끝나는 모든 문장 뒤에는 반드시 한 번의 줄바꿈을 해야 합니다. 한 줄에 하나의 완전한 문장만 작성합니다.
+- 항목화된 정보 제공: 순서나 절차가 중요하면 번호 매기기(1., 2., 3.)를, 그렇지 않으면 글머리 기호(- 또는 *)를 사용합니다.
+- 텍스트 강조 절대 금지: 답변의 어떤 부분에서도 텍스트를 굵게 만드는 마크다운 형식(예: **단어**)을 절대로 사용해서는 안 됩니다.
+- 링크 형식: 링크는 "링크 설명 텍스트: URL주소" 형식으로 제공해야 합니다. (예: - 중고나라 기술 블로그: https://teamblog.joonggonara.co.kr/)
+- 시각적 구분자(이모지) 활용: ✅, ❌, 🔄, ⏰, 📅, 📋, 💡, ⚠️, 📞, 🔗, ✨, 📝, 💰, 🏢, 👥 와 같은 정보 구분용 이모지만 제한적으로 사용하고, 감정 표현 이모지는 절대 사용하지 마세요.
+
+5. 기타 규칙
+- 인사 규칙: {greeting}
+- 정보 출처 언급 금지: 답변 시 "참고 자료에 따르면" 과 같은 표현을 사용하지 말고, 당신이 이미 알고 있는 지식처럼 자연스럽게 설명해야 합니다.
 
 ---
-[회사 전체 규정 문서]
+[참고 자료]
 {self.knowledge_base}
 ---
+
 [질문]
 {query}
+
 [답변]
 """
         try:
             response = self.gemini_model.generate_content(prompt)
+            final_response_text = greeting + response.text if greeting else response.text
             logger.info(f"Gemini 답변 생성 성공. (쿼리: {query[:30]}...)")
-            return response.text
+            return final_response_text
         except Exception as e:
             logger.error(f"Gemini API 호출 실패: {e}", exc_info=True)
             return "AI 답변 생성 중 오류가 발생했습니다."
@@ -126,9 +156,11 @@ def handle_all_message_events(body, say, logger):
                 logger.info("스레드 내에서 멘션을 감지하여 응답합니다.")
                 clean_query = text.replace(f"<@{bot.bot_id}>", "").strip()
                 
+                if not clean_query or len(clean_query) < 2: return
+
                 # 기존 스레드에 이어서 답변
                 thinking_message = say(text=random.choice(bot.responses['searching']), thread_ts=thread_ts)
-                final_answer = bot.generate_answer(clean_query)
+                final_answer = bot.generate_answer(clean_query, user_id, channel_id)
                 app.client.chat_update(channel=channel_id, ts=thinking_message['ts'], text=final_answer)
             else:
                 # 2b. 스레드 내에서 멘션이 없으면 무시
@@ -138,13 +170,11 @@ def handle_all_message_events(body, say, logger):
             logger.info("새로운 메시지를 감지했습니다. 스레드를 시작하며 답변합니다.")
             clean_query = text.strip()
             
-            if not clean_query or len(clean_query) < 2:
-                # 너무 짧은 메시지는 무시하여 불필요한 응답 방지
-                return
+            if not clean_query or len(clean_query) < 2: return
 
             # 새로운 스레드를 시작하며 답변 (thread_ts에 message_ts를 사용)
             thinking_message = say(text=random.choice(bot.responses['searching']), thread_ts=message_ts)
-            final_answer = bot.generate_answer(clean_query)
+            final_answer = bot.generate_answer(clean_query, user_id, channel_id)
             app.client.chat_update(channel=channel_id, ts=thinking_message['ts'], text=final_answer)
 
     except Exception as e:
