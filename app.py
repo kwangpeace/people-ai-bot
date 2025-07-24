@@ -11,7 +11,6 @@ logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s',
                     handlers=[logging.StreamHandler()])
 logger = logging.getLogger(__name__)
-logger.info("<<<<< 최종 버전 코드 실행 확인 >>>>>") 
 
 # --- 앱 초기화 ---
 try:
@@ -29,7 +28,6 @@ except Exception as e:
 # --- 메인 봇 클래스 ---
 class PeopleAIBot:
     def __init__(self):
-        # 봇 ID 가져오기
         try:
             self.bot_id = app.client.auth_test()['user_id']
             logger.info(f"봇 ID({self.bot_id})를 성공적으로 가져왔습니다.")
@@ -37,20 +35,14 @@ class PeopleAIBot:
             logger.error(f"봇 ID 가져오기 실패: {e}")
             self.bot_id = None
 
-        # Gemini API 설정
         self.gemini_model = self.setup_gemini()
-
-        # guide_data.txt 파일 내용을 메모리에 로드
         self.knowledge_base = self.load_knowledge_file()
-        
-        # 기타 설정
         self.responses = { "searching": ["잠시만요, 관련 정보를 찾고 있어요... 🕵️‍♀️", "생각하는 중... 🤔"] }
-        self.session_tracker = {}
 
     def setup_gemini(self):
         gemini_api_key = os.environ.get("GEMINI_API_KEY")
         if not gemini_api_key:
-            logger.error("GEMINI_API_KEY 환경 변수가 설정되지 않았습니다.")
+            logger.error("GEMINI_API_KEY가 설정되지 않았습니다.")
             return None
         try:
             genai.configure(api_key=gemini_api_key)
@@ -65,21 +57,19 @@ class PeopleAIBot:
         try:
             with open("guide_data.txt", 'r', encoding='utf-8') as f:
                 knowledge = f.read()
-            logger.info(f"지식 파일 'guide_data.txt' 로드 완료. (총 {len(knowledge)}자)")
+            logger.info(f"지식 파일 로드 완료. (총 {len(knowledge)}자)")
             return knowledge
         except FileNotFoundError:
             logger.error("'guide_data.txt' 파일을 찾을 수 없습니다.")
             return ""
         except Exception as e:
-            logger.error(f"지식 파일 로드 중 오류 발생: {e}")
+            logger.error(f"지식 파일 로드 중 오류: {e}")
             return ""
 
     def generate_answer(self, query):
-        if not self.gemini_model:
-            return "AI 모델이 설정되지 않아 답변을 생성할 수 없습니다."
-        if not self.knowledge_base:
-            return "지식 파일이 비어있어 답변을 드릴 수 없습니다. 'guide_data.txt' 파일을 확인해주세요."
-
+        if not self.gemini_model: return "AI 모델이 설정되지 않아 답변할 수 없습니다."
+        if not self.knowledge_base: return "지식 파일이 비어있어 답변할 수 없습니다."
+        
         prompt = f"""
 [지시문]
 당신은 '중고나라' 회사의 규정과 정보를 정확하게 안내하는 AI 어시스턴트 '피플AI'입니다. 당신의 유일한 임무는 아래 제공된 '[회사 전체 규정 문서]'의 내용만을 기반으로 사용자의 질문에 답변하는 것입니다.
@@ -87,7 +77,7 @@ class PeopleAIBot:
 [엄격한 작업 절차]
 1. 사용자의 '[질문]'을 주의 깊게 읽고, 질문에 '평점', '가까운', '종류' 등 **조건이나 필터링**이 포함되어 있는지 파악합니다.
 2. '[회사 전체 규정 문서]'에서 질문과 관련된 내용을 모두 찾습니다.
-3. 만약 질문에 조건이 포함되어 있다면, 찾은 정보 내의 구조화된 데이터(예: '네이버 평점: 4.4', '거리: 약 200m')를 보고 **조건에 맞는 정보만 선별합니다.**
+3. 만약 질문에 조건이 포함되어 있다면, 찾은 정보 내의 구조화된 데이터(예: '네이버 평점: 4.4')를 보고 **조건에 맞는 정보만 선별합니다.**
 4. 선별된 정보를 바탕으로 사용자가 보기 쉽게 목록 형태로 답변을 생성합니다.
 5. 만약 문서에서 질문에 대한 내용을 찾을 수 없다면, **오직 "문의주신 내용은 제가 가진 정보에서는 찾기 어렵네요. 피플팀에 직접 문의해주시겠어요? 📞"** 라고만 답변해야 합니다.
 
@@ -99,10 +89,8 @@ class PeopleAIBot:
 [회사 전체 규정 문서]
 {self.knowledge_base}
 ---
-
 [질문]
 {query}
-
 [답변]
 """
         try:
@@ -113,65 +101,61 @@ class PeopleAIBot:
             logger.error(f"Gemini API 호출 실패: {e}", exc_info=True)
             return "AI 답변 생성 중 오류가 발생했습니다."
 
-# --- 봇 인스턴스 생성 ---
 bot = PeopleAIBot()
 
-# --- Slack 이벤트 핸들러 (채널/DM 분리 버전) ---
-@app.event("app_mention")
-def handle_app_mention_events(body, say, logger):
-    logger.info("app_mention 이벤트를 수신했습니다. (채널 호출)")
+# --- Slack 이벤트 핸들러 (모든 규칙이 적용된 최종 버전) ---
+@app.event("message")
+def handle_all_message_events(body, say, logger):
     try:
-        user_query = body["event"]["text"]
-        channel_id = body["event"]["channel"]
-        thread_ts = body["event"].get("ts")
-        clean_query = user_query.replace(f"<@{bot.bot_id}>", "").strip()
-
-        if not clean_query or len(clean_query) < 2:
-            say(text="무엇이 궁금하신가요? 😊", thread_ts=thread_ts)
+        event = body["event"]
+        user_id = event.get("user")
+        
+        # 1. 봇 자신이 보낸 메시지, 채널 참여/퇴장 등 시스템 메시지는 무조건 무시
+        if "subtype" in event or (bot.bot_id and user_id == bot.bot_id):
             return
 
-        thinking_message = say(text=random.choice(bot.responses['searching']), thread_ts=thread_ts)
-        final_answer = bot.generate_answer(clean_query)
-        app.client.chat_update(channel=channel_id, ts=thinking_message['ts'], text=final_answer)
-
-    except Exception as e:
-        logger.error(f"app_mention 이벤트 처리 실패: {e}", exc_info=True)
-        say(text=f"앗, 오류가 발생했어요. 😢", thread_ts=body["event"].get("ts"))
-
-@app.event("message")
-def handle_message_events(body, say, logger):
-    if body["event"].get("channel_type") == "im":
-        logger.info("DM 메시지 이벤트를 수신했습니다.")
-        try:
-            user_query = body["event"]["text"]
-            user_id = body["event"]["user"]
-            channel_id = body["event"]["channel"]
-            
-            if "subtype" in body["event"] or (bot.bot_id and user_id == bot.bot_id):
+        channel_id = event.get("channel")
+        text = event.get("text", "")
+        thread_ts = event.get("thread_ts") # 스레드 안의 메시지인지 확인하는 키
+        message_ts = event.get("ts") # 현재 메시지의 고유 타임스탬프
+        
+        # 2. 스레드 안에서의 대화인지(thread_ts가 있는지) 확인
+        if thread_ts:
+            # 2a. 스레드 안에서는 멘션될 때만 응답
+            if f"<@{bot.bot_id}>" in text:
+                logger.info("스레드 내에서 멘션을 감지하여 응답합니다.")
+                clean_query = text.replace(f"<@{bot.bot_id}>", "").strip()
+                
+                # 기존 스레드에 이어서 답변
+                thinking_message = say(text=random.choice(bot.responses['searching']), thread_ts=thread_ts)
+                final_answer = bot.generate_answer(clean_query)
+                app.client.chat_update(channel=channel_id, ts=thinking_message['ts'], text=final_answer)
+            else:
+                # 2b. 스레드 내에서 멘션이 없으면 무시
                 return
-
-            clean_query = user_query.strip()
-
+        else:
+            # 3. 스레드가 아닌 새로운 메시지 (채널/DM 모두 해당)는 항상 응답
+            logger.info("새로운 메시지를 감지했습니다. 스레드를 시작하며 답변합니다.")
+            clean_query = text.strip()
+            
             if not clean_query or len(clean_query) < 2:
-                say("무엇이 궁금하신가요? 😊")
+                # 너무 짧은 메시지는 무시하여 불필요한 응답 방지
                 return
-            
-            thinking_message = say(random.choice(bot.responses['searching']))
+
+            # 새로운 스레드를 시작하며 답변 (thread_ts에 message_ts를 사용)
+            thinking_message = say(text=random.choice(bot.responses['searching']), thread_ts=message_ts)
             final_answer = bot.generate_answer(clean_query)
             app.client.chat_update(channel=channel_id, ts=thinking_message['ts'], text=final_answer)
 
-        except Exception as e:
-            logger.error(f"DM 메시지 처리 실패: {e}", exc_info=True)
-            say("앗, 오류가 발생했어요. 😢")
+    except Exception as e:
+        logger.error(f"message 이벤트 처리 중 오류 발생: {e}", exc_info=True)
 
 # --- Flask 라우팅 ---
 @flask_app.route("/slack/events", methods=["POST"])
-def slack_events():
-    return handler.handle(request)
+def slack_events(): return handler.handle(request)
 
 @flask_app.route("/", methods=["GET"])
-def health_check():
-    return "피플AI (단순 검색 모드) 정상 작동중! 🟢"
+def health_check(): return "피플AI (채널 참여 모드) 정상 작동중! 🟢"
 
 # --- 앱 실행 ---
 if __name__ == "__main__":
