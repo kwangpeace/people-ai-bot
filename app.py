@@ -11,6 +11,7 @@ logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s',
                     handlers=[logging.StreamHandler()])
 logger = logging.getLogger(__name__)
+logger.info("<<<<< 최종 버전 코드 실행 확인 >>>>>") 
 
 # --- 앱 초기화 ---
 try:
