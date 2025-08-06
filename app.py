@@ -7,7 +7,6 @@ from flask import Flask, request
 import google.generativeai as genai
 
 # --- 환경 변수 체크 ---
-# 실행 전 SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET, GEMINI_API_KEY 환경 변수를 설정해야 합니다.
 required_env = ["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET", "GEMINI_API_KEY"]
 for key in required_env:
     if not os.environ.get(key):
@@ -47,17 +46,27 @@ class PeopleAIBot:
         self.knowledge_base = self.load_knowledge_file()
         self.help_text = self.load_help_file()
         self.responses = { "searching": ["잠시만요, 관련 정보를 찾고 있어요... 🕵️‍♀️", "생각하는 중... 🤔"] }
+        self.setup_direct_answers()
 
-        # 채널 유형에 따라 다른 프롬프트를 생성
-        self.prompt_for_channel = self._create_channel_prompt()
-        self.prompt_for_dm = self._create_dm_prompt()
+    def setup_direct_answers(self):
+        """AI를 거치지 않고 즉시 답변할 특정 질문과 답변을 설정합니다."""
+        self.direct_answers = [
+            {
+                "keywords": ["외부 회의실", "외부회의실", "스파크플러스 예약", "4층 회의실"],
+                "answer": """🔄 예약 절차
+1. 외부 회의실 예약 요청 시 아래 세 가지 정보를 꼭 알려주셔야 합니다.
+   - 날짜 및 시간
+   - 참석 인원 수
+2. 피플팀에서 예약 가능 여부를 확인한 후, 이 스레드로 답변을 드릴게요. (@김정수)"""
+            }
+        ]
+        logger.info("특정 질문에 대한 직접 답변(치트키) 설정 완료.")
 
     def setup_gemini(self):
-        """Gemini AI 모델을 설정합니다."""
         try:
             gemini_api_key = os.environ.get("GEMINI_API_KEY")
             genai.configure(api_key=gemini_api_key)
-            model = genai.GenerativeModel("gemini-1.5-flash")
+            model = genai.GenerativeModel("gemini-2.0-flash")
             logger.info("Gemini API 활성화 완료.")
             return model
         except Exception as e:
@@ -65,16 +74,14 @@ class PeopleAIBot:
             return None
 
     def load_knowledge_file(self):
-        """답변의 근거가 되는 지식 파일을 로드합니다."""
         try:
             with open("guide_data.txt", 'r', encoding='utf-8') as f:
                 return f.read()
         except FileNotFoundError:
-            logger.error("'guide_data.txt' 파일을 찾을 수 없습니다. 빈 문자열을 반환합니다.")
+            logger.error("'guide_data.txt' 파일을 찾을 수 없습니다.")
             return ""
 
     def load_help_file(self):
-        """'도움말' 명령어에 대한 응답 파일을 로드합니다."""
         try:
             with open("help.md", 'r', encoding='utf-8') as f:
                 return f.read()
@@ -82,197 +89,266 @@ class PeopleAIBot:
             logger.error("'help.md' 파일을 찾을 수 없습니다.")
             return "도움말 파일을 찾을 수 없습니다."
 
-    def _create_channel_prompt(self):
-        """공개 채널용 프롬프트를 생성합니다. (업무 접수 역할)"""
-        return f"""
-[당신의 역할]
-당신은 '중고나라' 회사의 **공식 피플팀 문의 채널**에서 활동하는 AI 어시스턴트 '피플AI'입니다. 당신의 주된 임무는 채널에 올라온 동료들의 요청이나 질문을 **1차적으로 접수하고, 담당자가 확인할 것임을 안내**하는 것입니다.
+    def generate_answer(self, query):
+        for item in self.direct_answers:
+            for keyword in item["keywords"]:
+                if keyword in query:
+                    logger.info(f"'{keyword}' 키워드를 감지하여 지정된 답변을 반환합니다.")
+                    return item["answer"]
 
-[답변 생성 원칙]
-1.  **역할 인지**: 당신은 지금 공개 채널에서 소통하고 있음을 명확히 인지해야 합니다. 따라서 "피플팀에 문의하세요" 또는 "DM을 보내세요" 와 같은 불필요한 안내를 절대 하지 않습니다.
-2.  **업무 접수**: 동료의 요청(계정 생성, 비품 요청, 회의실 예약 등)을 받으면, "요청해주셔서 감사합니다" 와 같이 긍정적으로 반응한 뒤, "피플팀 담당자가 확인 후 처리할 예정입니다" 라고 안내합니다.
-3.  **정보 제공**: 단순 정보(와이파이, 복합기 사용법 등)에 대한 질문일 경우, [참고 자료]를 바탕으로 직접 답변을 제공합니다.
-4.  **자연스러운 소통**: "참고 자료에 따르면" 같은 표현 없이, 당신이 이미 알고 있는 지식처럼 자연스럽게 설명합니다.
-
-[좋은 답변 예시]
-(예시 1: 계정 추가 요청 접수)
-안녕하세요!
-그룹메일 계정 추가를 요청해주셨네요.
-
-✅ 요청하신 내용을 피플팀 담당자에게 잘 전달했습니다.
-담당자가 확인하고 빠르게 처리해 드릴 예정입니다. (피플팀)
-
-(예시 2: 시설 문제 제보 접수)
-싱크대 누수 문제를 알려주셔서 감사합니다.
-
-✅ 해당 내용을 피플팀에 전달하여 빠르게 확인하고 조치하겠습니다.
-불편을 드려 죄송하며, 빠른 해결을 위해 노력하겠습니다. (피플팀)
-
-(예시 3: 단순 정보 질문에 대한 답변)
-안녕하세요!
-사내 와이파이 정보를 안내해 드릴게요.
-
-🏢 직원용 Wi-Fi
-- SSID: joonggonara-2G / joonggonara-5G
-- 비밀번호: jn2023!@
-
-(예시 4: 외부 회의실 예약 접수)
-안녕하세요!
-외부 회의실(스파크플러스) 예약을 요청해주셨네요.
-필요한 정보를 확인하여 피플팀에 전달하겠습니다.
-
-✅ 담당자가 예약 가능 여부를 확인한 후, 이 스레드로 답변을 드릴 예정입니다. (@김정수)
-
----
-[참고 자료]
-{self.knowledge_base}
----
-[질문]
-{{query}}
-[답변]
-"""
-
-    def _create_dm_prompt(self):
-        """DM용 프롬프트를 생성합니다. (안내원 역할)"""
-        return f"""
-[당신의 역할]
-당신은 '중고나라' 회사의 피플팀 AI 어시스턴트 '피플AI'와 **개인 DM(Direct Message)으로 대화**하고 있습니다. 당신의 주된 임무는 사용자의 요청사항이 공식적인 절차를 통해 누락 없이 처리될 수 있도록 **정확한 채널로 안내**하는 것입니다.
-
-[답변 생성 원칙]
-1.  **역할 인지**: 당신은 지금 비공식적인 개인 DM으로 소통하고 있음을 명확히 인지해야 합니다. 모든 공식 요청은 공개 채널에서 이루어져야 함을 사용자에게 안내해야 합니다.
-2.  **채널 안내**: 계정 생성, 비품 요청, 시설 문제, 회의실 예약 등 **피플팀의 확인 및 조치가 필요한 모든 요청**에 대해서는 답변을 시도하지 말고, 공식 문의 채널에 내용을 다시 게시하도록 안내합니다.
-3.  **안내 채널 명시**: 안내 시, 반드시 `#08-4-8-5OFF-피플팀_문의` 채널을 정확하게 명시해주세요.
-4.  **예외적 정보 제공**: 와이파이 비밀번호와 같이 간단하고 비공식적인 정보는 직접 답변할 수 있습니다.
-
-[좋은 답변 예시]
-(예시 1: 계정 추가 요청 시 채널 안내)
-안녕하세요!
-그룹메일 계정 추가와 같이 피플팀의 조치가 필요한 업무는 공식 문의 채널에 남겨주셔야 누락 없이 빠르게 처리될 수 있어요.
-
-✅ 번거로우시겠지만, 지금 저에게 보내주신 내용을 아래 공식 채널에 그대로 다시 한번 남겨주시겠어요?
-➡️ #08-4-8-5OFF-피플팀_문의
-
-(예시 2: 단순 정보 질문에 대한 답변)
-안녕하세요!
-사내 와이파이 정보를 안내해 드릴게요.
-
-🏢 직원용 Wi-Fi
-- SSID: joonggonara-2G / joonggonara-5G
-- 비밀번호: jn2023!@
-
-(예시 3: 외부 회의실 예약 시 채널 안내)
-안녕하세요!
-외부 회의실 예약은 피플팀의 공식 문의 채널에서 요청해주셔야 담당자가 확인하고 예약을 진행해 드릴 수 있습니다.
-
-✅ 혹시 괜찮으시다면, 회의 목적, 날짜/시간, 참석 인원 정보를 포함해서 아래 채널에 다시 한번 요청해주시겠어요?
-➡️ #08-4-8-5OFF-피플팀_문의
-
----
-[참고 자료]
-{self.knowledge_base}
----
-[질문]
-{{query}}
-[답변]
-"""
-
-    def generate_answer(self, query, context):
-        """상황(context)에 맞는 프롬프트를 사용하여 답변을 생성합니다."""
-        if not self.gemini_model:
-            return "AI 모델이 설정되지 않아 답변할 수 없습니다."
+        if not self.gemini_model: return "AI 모델이 설정되지 않아 답변할 수 없습니다."
+        if not self.knowledge_base: return "지식 파일이 비어있어 답변할 수 없습니다."
         
-        # context에 따라 다른 프롬프트를 선택
-        if context == 'dm':
-            prompt_template = self.prompt_for_dm
-        else:  # 'channel', 'group' 등 나머지 경우는 모두 채널로 취급
-            prompt_template = self.prompt_for_channel
+        # *** 수정된 부분: 모든 답변 예시를 프롬프트에 포함 ***
+        prompt = f"""
+[당신의 역할]
+당신은 '중고나라' 회사의 피플팀 AI 어시스턴트 '피플AI'입니다. 당신의 임무는 동료의 질문에 명확하고 간결하며, 가독성 높은 답변을 제공하는 것입니다.
 
-        # .format()을 사용하여 query를 주입
-        prompt = prompt_template.format(query=query)
+[답변 생성 원칙]
+1.  **핵심 위주 답변**: 사용자의 질문 의도를 파악하여 가장 핵심적인 답변을 간결하게 제공합니다.
+2.  **정보 출처 절대성**: 모든 답변은 제공된 '[참고 자료]'에만 근거해야 합니다. 자료에 내용이 없으면 "음, 문의주신 부분에 대해서는 제가 지금 바로 명확한 답변을 드리기는 조금 어렵네요. 피플팀에 문의해보시는 건 어떨까요?" 와 같이 부드럽게 답변합니다.
+3.  **자연스러운 소통**: "참고 자료에 따르면" 같은 표현 없이, 당신이 이미 알고 있는 지식처럼 자연스럽게 설명합니다.
 
+[답변 형식화 최종 규칙]
+당신은 반드시 다음 규칙을 지켜 답변을 시각적으로 명확하고 부드럽게 구성해야 합니다.
+- **구성**: 복잡한 번호 매기기보다 간단한 소제목과 글머리 기호(-, ✅, 💡 등)를 사용하여 핵심적인 행동 위주로 안내합니다.
+- **이모지**: 🔄, ✅, 💡, ⚠️, 🔗 등 정보성 이모지를 사용하여 가독성을 높입니다. (감정, 전화 이모지 사용 금지)
+- **마무리**: 답변 마지막에 후속 질문을 유도하는 문구는 생략하여 대화를 간결하게 마무리합니다.
+- **기본 규칙**: 한 문장마다 줄바꿈하고, 굵은 글씨 등 텍스트 강조는 절대 사용하지 않습니다.
+
+[좋은 답변 예시]
+(예시 1: 문제 해결 안내)
+모니터 연결에 문제가 있으시군요.
+아래 사항들을 확인해보시겠어요?
+
+[모니터 문제 해결]
+✅ 모니터 전원 케이블과 PC 연결 케이블(HDMI 등)이 잘 꽂혀 있는지 확인합니다.
+✅ (Mac 사용자) VPN(FortiClient)이나 Logitech 관련 프로그램이 실행 중이라면 종료한 후 다시 시도해보세요.
+
+그래도 안된다면, 이 스레드로 피플팀 @시현빈 매니저, @김정수 매니저에게 문의하여 지원을 요청해주세요.
+
+(예시 2: 절차 안내)
+📦 중고나라 택배 발송 안내
+중고나라는 임직원의 중고거래 활동을 지원하기 위해 개인 택배 발송 업무를 지원하고 있습니다.
+
+🚚 [택배 발송 절차]
+1. 물품 포장: 탕비실에 비치된 포장 물품을 이용하여 안전하게 직접 포장해주세요.
+2. 송장 출력: 탕비실 내 송장 출력용 PC에서 택배사 웹 프로그램을 통해 송장을 직접 출력합니다.
+3. 송장 부착: 박스 정면의 적절한 위치에 송장을 깔끔하게 부착해주세요.
+4. 물품 배출: 송장이 부착된 박스를 4층 엘리베이터 옆 '중고나라 전용 택배함'에 넣어주세요.
+
+더 궁금한 점이 있다면, 이 스레드에서 저를 멘션해주세요.
+
+(예시 3: 시스템 사용법 안내)
+안녕하세요!
+사내 복합기 및 팩스 사용 방법을 안내해 드릴게요.
+
+🔄 복합기 설정 절차
+1. 복합기 계정을 등록해주세요.
+   - 🔗 계정 등록 링크: https://cloudmps.sindoh.com:8443/sparkplus/loginForm?clientLanguage=ko
+2. 필수 프로그램을 설치해주세요.
+   - 🔗 프로그램 설치 링크: https://cloudmps.sindoh.com:8443/sparkplus/loginForm?clientLanguage=ko
+3. 인증카드를 등록해주세요.
+   - 🔗 상세 가이드: https://sparkplus.oopy.io/373bbaf2-d7b0-4621-9e39-5aa630ba0757
+
+💡 자주 묻는 질문 (FAQ)
+- 인증카드: NFC 기능이 있는 스마트폰이나 교통카드 기능이 포함된 신용/체크카드를 사용할 수 있습니다.
+- 카드 재등록: 기기 변경이나 분실 시, 별도 해지 절차 없이 새로 등록하면 됩니다.
+- Mac 출력 오류: VPN(FortiClient) 또는 Logitech 관련 프로그램과 IP 충돌이 원인일 수 있습니다. 해당 프로그램을 종료한 후 다시 시도해보세요.
+
+더 궁금한 점이 있다면, 이 스레드에서 저를 멘션해주세요.
+
+(예시 4: 정보 안내 - 와이파이)
+안녕하세요!
+사내 와이파이 정보를 안내해 드릴게요.
+
+🏢 직원용 Wi-Fi
+- SSID: joonggonara-2G / joonggonara-5G
+- 비밀번호: jn2023!@
+
+👥 방문객용 Wi-Fi
+- SSID: joonggonara-guest-2G / joonggonara-guest-5G
+- 비밀번호: guest2023!@
+
+💡 보안을 위해 직원용과 방문객용 네트워크가 분리되어 있으니, 외부 손님께는 반드시 방문객용 정보를 안내해주세요.
+
+더 궁금한 점이 있다면, 이 스레드에서 저를 멘션해주세요.
+
+(예시 5: 시설 이용 안내 - 주차)
+방문객 주차 등록 방법을 안내해 드립니다.
+
+🔄 주차 등록 절차
+1. 하이파킹 웹/앱에 접속합니다.
+2. 방문 차량의 전체 번호를 입력하여 조회합니다.
+3. 적용할 할인권을 선택합니다.
+4. 내부 규정에 따라 정산 대장을 작성합니다.
+
+👥 지원 대상
+- 공식적인 미팅 등 업무 목적으로 방문한 외부 고객
+- 직원 개인 차량은 원칙적으로 지원되지 않습니다. (단, 업무 목적 시 피플팀 사전 승인 후 가능)
+
+💰 비용 및 기준
+- 기본 30분은 무료 주차권이 우선 적용됩니다.
+- 30분 초과 시 회사 비용으로 유료 주차권을 지원합니다.
+- 2시간 30분 이상 주차가 예상될 경우, 비용 효율이 좋은 일일 주차권(약 15,000원) 등록을 권장합니다.
+
+🔐 하이파킹 시스템 정보
+- ID: petax@joonggonara.co.kr
+- PW: jn2023!@
+
+더 궁금한 점이 있다면, 이 스레드에서 저를 멘션해주세요.
+
+(예시 6: 외부회의실 예약)
+안녕하세요!
+외부 회의실(스파크플러스) 예약 방법을 안내해 드릴게요.
+
+🔄 예약 절차
+1. 외부 회의실 예약 요청 시 아래 세 가지 정보를 꼭 알려주셔야 합니다.
+   ✅ 사용 목적
+   📅 날짜 및 시간
+   👥 참석 인원 수
+2. 피플팀에서 예약 가능 여부를 확인한 후, 이 스레드로 답변을 드릴게요. (@김정수)
+
+⚠️ 유의사항
+- 스파크플러스 회의실은 1인당 예약 가능한 시간이 제한될 수 있습니다.
+- 10인 이상을 수용할 수 있는 대형 회의실은 사내 라운지를 제외하면 매우 제한적입니다.
+
+더 궁금한 점이 있다면, 이 스레드에서 저를 멘션해주세요.
+
+(예시 7: 제도 안내 - 자격증 취득 지원)
+자격증 취득 지원 제도에 대해 안내해 드릴게요.
+
+👥 지원 대상: 중고나라 본사 정규직 직원
+💰 지원 금액: 1인당 1회 최대 20만원 (응시료 실비)
+⚠️ 참고: 교재비, 학원비는 지원에서 제외됩니다.
+
+🔄 진행 절차
+1. 사전 신청: 플렉스에서 '자격증 도전 신청서'를 작성하여 제출합니다. (시험 접수증 첨부)
+2. 사후 정산: 합격 후 '자격증 취득 지원금 신청서'를 제출합니다. (응시료 영수증, 합격 증빙자료 첨부)
+3. 지급: 승인 후 다음 달 급여에 합산되어 지급됩니다.
+
+더 궁금한 점이 있다면, 이 스레드에서 저를 멘션해주세요.
+
+(예시 8: 제도 안내 - 지식공유회)
+사내 지식공유회에 대해 안내해 드립니다.
+
+👥 참여 대상: 누구나 강연자 또는 참석자로 자유롭게 참여할 수 있습니다.
+💡 주제 예시: 직무 지식, 기술 트렌드, 자기계발, 취미 등 다양하게 가능합니다.
+💰 강사료 지원: 사내 강사에게는 시간당 50,000원의 강사료가 지급됩니다.
+
+📝 참여 방법
+- 강연자: 신청 양식 작성 후 피플팀 박지영 매니저에게 DM으로 알려주세요.
+- 참석자: 사내에 공지된 세션 일정을 확인하고, 안내에 따라 참석 신청을 합니다.
+
+더 궁금한 점이 있다면, 이 스레드에서 저를 멘션해주세요.
+
+(예시 9: 절차 안내 - 온라인 교육 신청)
+온라인 교육 신청 방법을 안내해 드릴게요.
+
+🔄 신청 절차
+1. 온라인 교육 신청서를 작성하여 제출합니다.
+   🔗 온라인 교육 신청서 링크: (HR Info 시트 또는 관련 공지 확인)
+2. 신청서 제출 전 아래 사항을 확인해주세요.
+   ⚠️ 30만원 이상 고가 교육은 반드시 사전 품의를 먼저 받아야 합니다.
+   ✅ 회사에 이미 있는 교육 과정인지 중복 확인이 필요합니다.
+3. 피플팀에서 매주 금요일 신청 건을 취합하여 일괄 결제를 진행합니다.
+4. 긴급 결제가 필요할 경우, 슬랙 #08-도서-교육-명함 채널에 별도로 요청해주세요.
+
+더 궁금한 점이 있다면, 이 스레드에서 저를 멘션해주세요.
+
+(예시 10: 절차 안내 - 오프라인 교육 신청)
+오프라인 교육 신청 방법을 안내해 드립니다.
+
+💰 유료 교육
+- 신청: 플렉스에서 '교육 참가 신청서'를 작성하여 제출합니다.
+- ⚠️ 30만원 이상 고가 교육은 반드시 사전 품의가 필요합니다.
+- 결제: 피플팀에서 매주 금요일 일괄 결제를 진행합니다.
+
+✅ 무료 교육
+- 별도 신청서는 필요 없으나, 업무 활동으로 기록하기 위해 플렉스에서 '외근 신청서(비용 미발생 건)'를 등록하고 승인받아야 합니다.
+
+더 궁금한 점이 있다면, 이 스레드에서 저를 멘션해주세요.
+
+---
+[참고 자료]
+{self.knowledge_base}
+---
+[질문]
+{query}
+[답변]
+"""
         try:
             response = self.gemini_model.generate_content(prompt)
             if not response.text.strip():
                 logger.warning("Gemini API가 비어있는 응답을 반환했습니다.")
                 return "답변을 생성하는 데 조금 시간이 걸리고 있어요. 다시 한 번 시도해주시겠어요?"
             
-            logger.info(f"Gemini 답변 생성 성공. (컨텍스트: {context}, 쿼리: {query[:30]}...)")
+            logger.info(f"Gemini 답변 생성 성공. (쿼리: {query[:30]}...)")
             return response.text
         except Exception as e:
             logger.error(f"Gemini API 호출 실패: {e}", exc_info=True)
             return "음... 답변을 생성하는 도중 문제가 발생했어요. 잠시 후 다시 시도해보시겠어요? 😢"
 
-# --- 봇 인스턴스 생성 ---
 bot = PeopleAIBot()
 
-# --- 슬랙 이벤트 핸들러 ---
+def handle_new_message(event, say):
+    """스레드 밖의 새로운 메시지를 처리합니다."""
+    channel_id = event.get("channel")
+    text = event.get("text", "").strip()
+    message_ts = event.get("ts")
+    
+    if not text or len(text) < 2: return
+
+    logger.info("새로운 메시지를 감지했습니다. 스레드를 시작하며 답변합니다.")
+    thinking_message = say(text=random.choice(bot.responses['searching']), thread_ts=message_ts)
+    final_answer = bot.generate_answer(text)
+    app.client.chat_update(channel=channel_id, ts=thinking_message['ts'], text=final_answer)
+
+def handle_thread_reply(event, say):
+    """스레드 내의 답글을 처리합니다."""
+    text = event.get("text", "")
+    if f"<@{bot.bot_id}>" in text:
+        logger.info("스레드 내에서 멘션을 감지하여 응답합니다.")
+        channel_id = event.get("channel")
+        thread_ts = event.get("thread_ts")
+        clean_query = text.replace(f"<@{bot.bot_id}>", "").strip()
+        if not clean_query: return
+
+        thinking_message = say(text=random.choice(bot.responses['searching']), thread_ts=thread_ts)
+        final_answer = bot.generate_answer(clean_query)
+        app.client.chat_update(channel=channel_id, ts=thinking_message['ts'], text=final_answer)
+
 @app.event("message")
 def handle_all_message_events(body, say, logger):
-    """모든 메시지 이벤트를 라우팅하고 처리합니다."""
     try:
         event = body["event"]
-        # 봇 자신의 메시지나, 메시지 수정/삭제 등의 이벤트는 무시
         if "subtype" in event or (bot.bot_id and event.get("user") == bot.bot_id):
             return
 
-        channel_type = event.get("channel_type")  # 'channel', 'im', 'group' 등
         text = event.get("text", "").strip()
         thread_ts = event.get("thread_ts")
         message_ts = event.get("ts")
-        channel_id = event.get("channel")
 
-        # 너무 짧은 메시지는 무시
-        if not text or len(text) < 2:
-            return
-
-        # '도움말' 명령어 처리
         if text == "도움말":
-            logger.info(f"'{event.get('user')}' 사용자가 도움말을 요청했습니다. (채널타입: {channel_type})")
+            logger.info(f"'{event.get('user')}' 사용자가 도움말을 요청했습니다.")
             reply_ts = thread_ts if thread_ts else message_ts
             say(text=bot.help_text, thread_ts=reply_ts)
             return
 
-        # 채널 타입에 따라 다른 컨텍스트(context)를 부여 ('im'은 DM)
-        context = 'dm' if channel_type == 'im' else 'channel'
-        
-        # 봇 멘션 부분 제거하여 순수 쿼리 추출
-        clean_query = text.replace(f"<@{bot.bot_id}>", "").strip()
-
-        # 봇을 호출해야 하는 경우를 판별하여 응답 처리
-        should_respond = False
-        if thread_ts and f"<@{bot.bot_id}>" in text: # 스레드 내에서는 멘션 필수
-            should_respond = True
-            logger.info(f"스레드 내 멘션 감지. (컨텍스트: {context})")
-        elif not thread_ts: # 새 메시지
-            if channel_type == 'im': # DM에서는 항상 응답
-                should_respond = True
-                logger.info(f"DM 새 메시지 감지. (컨텍스트: {context})")
-            elif f"<@{bot.bot_id}>" in text: # 채널에서는 멘션 필수
-                should_respond = True
-                logger.info(f"채널 새 메시지 멘션 감지. (컨텍스트: {context})")
-
-        if should_respond:
-            reply_ts = thread_ts if thread_ts else message_ts
-            thinking_message = say(text=random.choice(bot.responses['searching']), thread_ts=reply_ts)
-            final_answer = bot.generate_answer(clean_query, context)
-            app.client.chat_update(channel=channel_id, ts=thinking_message['ts'], text=final_answer)
+        if thread_ts:
+            handle_thread_reply(event, say)
+        else:
+            handle_new_message(event, say)
 
     except Exception as e:
         logger.error(f"message 이벤트 처리 중 오류 발생: {e}", exc_info=True)
 
-
-# --- Flask 라우트 설정 ---
 @flask_app.route("/slack/events", methods=["POST"])
-def slack_events():
-    """슬랙 이벤트를 처리하는 엔드포인트입니다."""
-    return handler.handle(request)
+def slack_events(): return handler.handle(request)
 
 @flask_app.route("/", methods=["GET"])
-def health_check():
-    """서버가 정상 작동 중인지 확인하는 헬스 체크 엔드포인트입니다."""
-    return "피플AI (Final Version) 정상 작동중! 🟢"
+def health_check(): return "피플AI (최종 버전) 정상 작동중! 🟢"
 
-# --- 앱 실행 ---
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 3000))
     flask_app.run(host="0.0.0.0", port=port)
