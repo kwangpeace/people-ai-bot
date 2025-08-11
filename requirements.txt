@@ -12,3 +12,6 @@ google-api-python-client==2.111.0
 gunicorn
 huggingface-hub==0.19.4
 transformers==4.30.0
+beautifulsoup4
+gspread
+google-auth-oauthlib
