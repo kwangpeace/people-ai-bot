@@ -19,7 +19,7 @@ required_env = [
     "SLACK_SIGNING_SECRET",
     "GEMINI_API_KEY",
     "GOOGLE_SHEET_ID",
-    "GOOGLE_CREDENTIALS"  # credentials.json 대신 환경 변수 추가
+    "GOOGLE_CREDENTIALS"
 ]
 for key in required_env:
     if not os.environ.get(key):
@@ -56,7 +56,7 @@ class PeopleAIBot:
             self.bot_id = None
 
         self.gemini_model = self.setup_gemini()
-        self.worksheet = self.setup_google_sheets()  # 구글 시트 설정 추가
+        self.worksheet = self.setup_google_sheets()
         self.knowledge_base = self.load_knowledge_file()
         self.help_text = self.load_help_file()
         self.responses = {"searching": ["잠시만요, 관련 정보를 찾고 있어요... 🕵️‍♀️", "생각하는 중... 🤔"]}
@@ -66,7 +66,7 @@ class PeopleAIBot:
         """Google Sheets API를 설정하고 워크시트를 반환합니다."""
         try:
             scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-            creds_json_str = os.environ.get("GOOGLE_CREDENTIALS")  # GOOGLE_CREDENTIALS 사용
+            creds_json_str = os.environ.get("GOOGLE_CREDENTIALS")
 
             if creds_json_str:
                 logger.info("환경 변수에서 Google 인증 정보를 로드합니다.")
@@ -194,7 +194,7 @@ bot = PeopleAIBot()
 def handle_new_message(event, say):
     """스레드 밖의 새로운 메시지를 처리합니다."""
     channel_id = event.get("channel")
-    text = event.get("text", "").strip().replace(f"<@{bot.bot_id}>", "").strip()
+    text = event.get("text", "").strip()
     message_ts = event.get("ts")
     
     if not text: return
@@ -222,7 +222,9 @@ def handle_thread_reply(event, say):
 def handle_all_message_events(body, say, logger):
     try:
         event = body["event"]
+        logger.info(f"Received event: {event}")  # 이벤트 내용 로그
         if "subtype" in event or (bot.bot_id and event.get("user") == bot.bot_id):
+            logger.info("Event ignored due to subtype or bot self-message")
             return
 
         text = event.get("text", "").strip()
@@ -230,16 +232,44 @@ def handle_all_message_events(body, say, logger):
         thread_ts = event.get("thread_ts", event.get("ts"))
         message_ts = event.get("ts")
 
+        logger.info(f"Processing message - text: {text}, channel: {channel_id}, thread_ts: {thread_ts}")
+
         if text == "도움말":
             logger.info(f"'{event.get('user')}' 사용자가 도움말을 요청했습니다.")
             reply_ts = thread_ts if thread_ts else message_ts
             say(text=bot.help_text, thread_ts=reply_ts)
             return
 
-        if f"<@{bot.bot_id}>" in text:
+        # 도서 신청은 @피플AI 호출 필요
+        book_request_pattern = re.search(f"<@{bot.bot_id}>\\s+도서신청\\s+(https?://\\S+)", text)
+        if book_request_pattern:
+            url = book_request_pattern.group(1)
+            logger.info(f"Detected book request with URL: {url}")
+            say(text=f"✅ 도서 신청을 접수했습니다. 잠시만 기다려주세요...\n> {url}", thread_ts=thread_ts)
+            
+            book_info = bot.extract_book_info(url)
+            if book_info and book_info["title"] != "제목을 찾을 수 없습니다.":
+                success = bot.add_book_to_sheet(book_info)
+                if success:
+                    reply_text = (f"📚 *도서 신청이 완료되었습니다!*\n\n"
+                                  f"• *책 제목:* {book_info['title']}\n"
+                                  f"• *저자:* {book_info['author']}\n\n"
+                                  f"🔗 구글 시트에 정상적으로 추가되었습니다.")
+                else:
+                    reply_text = "⚠️ 도서 정보는 찾았지만, 구글 시트에 추가하는 중 문제가 발생했습니다."
+            else:
+                reply_text = "⚠️ 해당 링크에서 도서 정보를 찾을 수 없습니다. 교보문고 상품 상세 링크가 맞는지 확인해주세요."
+            
+            app.client.chat_postMessage(channel=channel_id, text=reply_text, thread_ts=thread_ts)
+            return
+
+        # @ 호출 없이도 일반 질문 처리
+        if text and not book_request_pattern:
             if event.get("thread_ts"):
+                logger.info("Processing thread reply without mention")
                 handle_thread_reply(event, say)
             else:
+                logger.info("Starting new thread without mention")
                 handle_new_message(event, say)
 
     except Exception as e:
