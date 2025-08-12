@@ -18,7 +18,8 @@ required_env = [
     "SLACK_BOT_TOKEN",
     "SLACK_SIGNING_SECRET",
     "GEMINI_API_KEY",
-    "GOOGLE_SHEET_ID"
+    "GOOGLE_SHEET_ID",
+    "GOOGLE_CREDENTIALS"  # credentials.json 대신 환경 변수 추가
 ]
 for key in required_env:
     if not os.environ.get(key):
@@ -55,25 +56,24 @@ class PeopleAIBot:
             self.bot_id = None
 
         self.gemini_model = self.setup_gemini()
-        self.worksheet = self.setup_google_sheets() # 구글 시트 설정 추가
+        self.worksheet = self.setup_google_sheets()  # 구글 시트 설정 추가
         self.knowledge_base = self.load_knowledge_file()
         self.help_text = self.load_help_file()
-        self.responses = { "searching": ["잠시만요, 관련 정보를 찾고 있어요... 🕵️‍♀️", "생각하는 중... 🤔"] }
+        self.responses = {"searching": ["잠시만요, 관련 정보를 찾고 있어요... 🕵️‍♀️", "생각하는 중... 🤔"]}
         self.setup_direct_answers()
 
     def setup_google_sheets(self):
         """Google Sheets API를 설정하고 워크시트를 반환합니다."""
         try:
             scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-            creds_json_str = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+            creds_json_str = os.environ.get("GOOGLE_CREDENTIALS")  # GOOGLE_CREDENTIALS 사용
 
-            if creds_json_str:
-                logger.info("환경 변수에서 Google 인증 정보를 로드합니다.")
-                creds_info = json.loads(creds_json_str)
-                creds = service_account.Credentials.from_service_account_info(creds_info, scopes=scopes)
-            else:
-                logger.info("로컬 'credentials.json' 파일에서 Google 인증 정보를 로드합니다.")
-                creds = service_account.Credentials.from_service_account_file("credentials.json", scopes=scopes)
+            if not creds_json_str:
+                raise ValueError("GOOGLE_CREDENTIALS 환경 변수가 설정되지 않았습니다.")
+
+            logger.info("환경 변수에서 Google 인증 정보를 로드합니다.")
+            creds_info = json.loads(creds_json_str)
+            creds = service_account.Credentials.from_service_account_info(creds_info, scopes=scopes)
 
             client = gspread.authorize(creds)
             sheet_id = os.environ.get("GOOGLE_SHEET_ID")
@@ -159,8 +159,10 @@ class PeopleAIBot:
                     logger.info(f"'{keyword}' 키워드를 감지하여 지정된 답변을 반환합니다.")
                     return item["answer"]
 
-        if not self.gemini_model: return "AI 모델이 설정되지 않아 답변할 수 없습니다."
-        if not self.knowledge_base: return "지식 파일이 비어있어 답변할 수 없습니다."
+        if not self.gemini_model:
+            return "AI 모델이 설정되지 않아 답변할 수 없습니다."
+        if not self.knowledge_base:
+            return "지식 파일이 비어있어 답변할 수 없습니다."
         
         prompt = f"""
         [당신의 역할]
@@ -196,7 +198,8 @@ def handle_new_message(event, say):
     text = event.get("text", "").strip().replace(f"<@{bot.bot_id}>", "").strip()
     message_ts = event.get("ts")
     
-    if not text: return
+    if not text:
+        return
 
     logger.info("새로운 메시지를 감지했습니다. 스레드를 시작하며 답변합니다.")
     thinking_message = say(text=random.choice(bot.responses['searching']), thread_ts=message_ts)
@@ -211,7 +214,8 @@ def handle_thread_reply(event, say):
         channel_id = event.get("channel")
         thread_ts = event.get("thread_ts")
         clean_query = text.replace(f"<@{bot.bot_id}>", "").strip()
-        if not clean_query: return
+        if not clean_query:
+            return
 
         thinking_message = say(text=random.choice(bot.responses['searching']), thread_ts=thread_ts)
         final_answer = bot.generate_answer(clean_query)
