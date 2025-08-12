@@ -6,3 +6,4 @@ google-generativeai
 gspread
 google-auth-oauthlib
 gunicorn
+playwright
