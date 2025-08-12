@@ -151,7 +151,7 @@ class PeopleAIBot:
                 return f.read()
         except FileNotFoundError:
             logger.error("'help.md' 파일을 찾을 수 없습니다.")
-            return "도움말 파일을 찾을 수 없습니다."
+            return "기본 도움말: @피플AI에게 '도서신청' 또는 질문을 물어보세요!"
 
     def generate_answer(self, query):
         for item in self.direct_answers:
@@ -222,7 +222,7 @@ def handle_thread_reply(event, say):
 def handle_all_message_events(body, say, logger):
     try:
         event = body["event"]
-        logger.info(f"Received event: {event}")  # 이벤트 내용 로그
+        logger.info(f"Received event: {event}")  # 전체 이벤트 로그
         if "subtype" in event or (bot.bot_id and event.get("user") == bot.bot_id):
             logger.info("Event ignored due to subtype or bot self-message")
             return
@@ -231,8 +231,9 @@ def handle_all_message_events(body, say, logger):
         channel_id = event.get("channel")
         thread_ts = event.get("thread_ts", event.get("ts"))
         message_ts = event.get("ts")
+        files = event.get("files", [])  # 파일 정보 확인
 
-        logger.info(f"Processing message - text: {text}, channel: {channel_id}, thread_ts: {thread_ts}")
+        logger.info(f"Processing message - text: {text}, channel: {channel_id}, thread_ts: {thread_ts}, files: {files}")
 
         if text == "도움말":
             logger.info(f"'{event.get('user')}' 사용자가 도움말을 요청했습니다.")
@@ -240,9 +241,13 @@ def handle_all_message_events(body, say, logger):
             say(text=bot.help_text, thread_ts=reply_ts)
             return
 
-        # 도서 신청은 @피플AI 호출 필요
-        book_request_pattern = re.search(f"<@{bot.bot_id}>\\s+도서신청\\s+(https?://\\S+)", text)
+        # 도서 신청은 @피플AI 호출 필요, 텍스트 URL만 지원
+        book_request_pattern = re.search(f"<@{bot.bot_id}>\\s+도서신청\\s+(https?://[^\\s]+)", text)  # URL 매칭 개선
         if book_request_pattern:
+            if files:
+                logger.info("Image detected, rejecting book request")
+                say(text="⚠️ 도서 신청에는 이미지를 첨부하지 말고, 텍스트로 교보문고 URL을 입력해주세요.", thread_ts=thread_ts)
+                return
             url = book_request_pattern.group(1)
             logger.info(f"Detected book request with URL: {url}")
             say(text=f"✅ 도서 신청을 접수했습니다. 잠시만 기다려주세요...\n> {url}", thread_ts=thread_ts)
@@ -263,7 +268,7 @@ def handle_all_message_events(body, say, logger):
             app.client.chat_postMessage(channel=channel_id, text=reply_text, thread_ts=thread_ts)
             return
 
-        # @ 호출 없이도 일반 질문 처리
+        # @ 호출 없이도 일반 질문 및 도움말 외 처리
         if text and not book_request_pattern:
             if event.get("thread_ts"):
                 logger.info("Processing thread reply without mention")
