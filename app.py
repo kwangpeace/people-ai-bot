@@ -68,12 +68,13 @@ class PeopleAIBot:
             scopes = ["https://www.googleapis.com/auth/spreadsheets"]
             creds_json_str = os.environ.get("GOOGLE_CREDENTIALS")  # GOOGLE_CREDENTIALS 사용
 
-            if not creds_json_str:
-                raise ValueError("GOOGLE_CREDENTIALS 환경 변수가 설정되지 않았습니다.")
-
-            logger.info("환경 변수에서 Google 인증 정보를 로드합니다.")
-            creds_info = json.loads(creds_json_str)
-            creds = service_account.Credentials.from_service_account_info(creds_info, scopes=scopes)
+            if creds_json_str:
+                logger.info("환경 변수에서 Google 인증 정보를 로드합니다.")
+                creds_info = json.loads(creds_json_str)
+                creds = service_account.Credentials.from_service_account_info(creds_info, scopes=scopes)
+            else:
+                logger.info("로컬 'credentials.json' 파일에서 Google 인증 정보를 로드합니다.")
+                creds = service_account.Credentials.from_service_account_file("credentials.json", scopes=scopes)
 
             client = gspread.authorize(creds)
             sheet_id = os.environ.get("GOOGLE_SHEET_ID")
@@ -159,10 +160,8 @@ class PeopleAIBot:
                     logger.info(f"'{keyword}' 키워드를 감지하여 지정된 답변을 반환합니다.")
                     return item["answer"]
 
-        if not self.gemini_model:
-            return "AI 모델이 설정되지 않아 답변할 수 없습니다."
-        if not self.knowledge_base:
-            return "지식 파일이 비어있어 답변할 수 없습니다."
+        if not self.gemini_model: return "AI 모델이 설정되지 않아 답변할 수 없습니다."
+        if not self.knowledge_base: return "지식 파일이 비어있어 답변할 수 없습니다."
         
         prompt = f"""
         [당신의 역할]
@@ -198,8 +197,7 @@ def handle_new_message(event, say):
     text = event.get("text", "").strip().replace(f"<@{bot.bot_id}>", "").strip()
     message_ts = event.get("ts")
     
-    if not text:
-        return
+    if not text: return
 
     logger.info("새로운 메시지를 감지했습니다. 스레드를 시작하며 답변합니다.")
     thinking_message = say(text=random.choice(bot.responses['searching']), thread_ts=message_ts)
@@ -214,8 +212,7 @@ def handle_thread_reply(event, say):
         channel_id = event.get("channel")
         thread_ts = event.get("thread_ts")
         clean_query = text.replace(f"<@{bot.bot_id}>", "").strip()
-        if not clean_query:
-            return
+        if not clean_query: return
 
         thinking_message = say(text=random.choice(bot.responses['searching']), thread_ts=thread_ts)
         final_answer = bot.generate_answer(clean_query)
@@ -232,28 +229,6 @@ def handle_all_message_events(body, say, logger):
         channel_id = event.get("channel")
         thread_ts = event.get("thread_ts", event.get("ts"))
         message_ts = event.get("ts")
-
-        # "도서신청" 명령어 우선 처리
-        book_request_pattern = re.search(f"<@{bot.bot_id}>\\s+도서신청\\s+(https?://\\S+)", text)
-        if book_request_pattern:
-            url = book_request_pattern.group(1)
-            say(text=f"✅ 도서 신청을 접수했습니다. 잠시만 기다려주세요...\n> {url}", thread_ts=thread_ts)
-            
-            book_info = bot.extract_book_info(url)
-            if book_info and book_info["title"] != "제목을 찾을 수 없습니다.":
-                success = bot.add_book_to_sheet(book_info)
-                if success:
-                    reply_text = (f"📚 *도서 신청이 완료되었습니다!*\n\n"
-                                  f"• *책 제목:* {book_info['title']}\n"
-                                  f"• *저자:* {book_info['author']}\n\n"
-                                  f"🔗 구글 시트에 정상적으로 추가되었습니다.")
-                else:
-                    reply_text = "⚠️ 도서 정보는 찾았지만, 구글 시트에 추가하는 중 문제가 발생했습니다."
-            else:
-                reply_text = "⚠️ 해당 링크에서 도서 정보를 찾을 수 없습니다. 교보문고 상품 상세 링크가 맞는지 확인해주세요."
-            
-            app.client.chat_postMessage(channel=channel_id, text=reply_text, thread_ts=thread_ts)
-            return
 
         if text == "도움말":
             logger.info(f"'{event.get('user')}' 사용자가 도움말을 요청했습니다.")
