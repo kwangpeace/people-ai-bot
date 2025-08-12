@@ -1,9 +1,7 @@
 slack-bolt
 flask
-gunicorn
 requests
 beautifulsoup4
 google-generativeai
 gspread
 google-auth-oauthlib
-pytz
