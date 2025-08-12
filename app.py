@@ -110,30 +110,57 @@ class PeopleAIBot:
         except FileNotFoundError:
             logger.error("'help.md' 파일을 찾을 수 없습니다."); return "도움말 파일을 찾을 수 없습니다."
 
-    # (추가) 도서 정보 추출 기능
-    def extract_book_info(self, url):
-        try:
-            headers = {"User-Agent": "Mozilla/5.0"}
-            response = requests.get(url, headers=headers, timeout=10)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, "html.parser")
-            
-            title = soup.select_one('h1.prod_title, span.prod_title_text, h1.title, meta[property="og:title"]')
-            title_text = title.get('content', title.get_text(strip=True)) if title else "제목을 찾을 수 없습니다."
 
-            author = soup.select_one('a.author, span.author, meta[name="author"]')
-            author_text = author.get('content', author.get_text(strip=True)) if author else "저자를 찾을 수 없습니다."
 
-            isbn = "ISBN 정보 없음"
+def extract_book_info(self, url):
+    """(업그레이드 버전) meta 태그를 우선적으로 사용하여 안정성을 높인 정보 추출 함수"""
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        # 1순위: meta 태그에서 정보 추출 (가장 안정적)
+        title_meta = soup.find("meta", property="og:title")
+        author_meta = soup.find("meta", attrs={"name": "author"})
+        isbn_meta = soup.find("meta", attrs={"name": "isbn"})
+
+        title = title_meta["content"] if title_meta else None
+        author = author_meta["content"] if author_meta else None
+        isbn = isbn_meta["content"] if isbn_meta else None
+
+        # 2순위: meta 태그에 정보가 없을 경우, 기존의 HTML 태그에서 추출 시도 (예비용)
+        if not title:
+            title_elem = soup.select_one('h1.prod_title, span.prod_title_text, h1.title')
+            title = title_elem.get_text(strip=True) if title_elem else "제목을 찾을 수 없습니다."
+        
+        if not author:
+            author_elem = soup.select_one('a.author, span.author')
+            author = author_elem.get_text(strip=True) if author_elem else "저자를 찾을 수 없습니다."
+
+        if not isbn:
             for tr in soup.select("div.prod_detail_area_bottom table tr"):
                 if th := tr.find("th", string=re.compile("ISBN")):
                     if td := tr.find("td"):
-                        isbn = td.get_text(strip=True); break
-            
-            return {"title": title_text, "author": author_text, "url": url, "isbn": isbn}
-        except Exception as e:
-            logger.error(f"도서 정보 추출 중 오류 발생: {e}"); return None
+                        isbn = td.get_text(strip=True)
+                        break
+            if not isbn or isbn == "ISBN 정보 없음": # 최종적으로도 못찾으면 기본값 설정
+                 isbn = "ISBN 정보 없음"
 
+
+        logger.info(f"책 정보 추출 성공: 제목={title}, 저자={author}")
+        return {"title": title, "author": author, "url": url, "isbn": isbn}
+
+    except Exception as e:
+        logger.error(f"도서 정보 추출 중 오류 발생: {e}")
+        return None
+        
+
+
+
+    
     def generate_answer(self, query):
         for item in self.direct_answers:
             if any(keyword in query for keyword in item["keywords"]):
