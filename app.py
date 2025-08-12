@@ -88,24 +88,42 @@ class PeopleAIBot:
             return None
 
     def extract_book_info(self, url):
-        """교보문고 URL에서 책 정보를 추출합니다."""
-        try:
-            headers = {"User-Agent": "Mozilla/5.0"}
-            response = requests.get(url, headers=headers, timeout=10)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, "html.parser")
-            
-            title_elem = soup.select_one('span.prod_title_text')
+    """교보문고 URL에서 책 제목, 저자, ISBN 정보를 추출합니다."""
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        
+        # 제목과 저자 정보 추출 (기존과 동일, 안정성 강화)
+        title_elem = soup.select_one('span.prod_title_text, h1.prod_title, h1.title')
+        title = title_elem.get_text(strip=True) if title_elem else "제목을 찾을 수 없습니다."
+        
+        author_elem = soup.select_one('a.author, span.author')
+        author = author_elem.get_text(strip=True) if author_elem else "저자를 찾을 수 없습니다."
 
-            title = title_elem.get_text(strip=True) if title_elem else "제목을 찾을 수 없습니다."
-            
-            author_elem = soup.select_one('a.author')
-            author = author_elem.get_text(strip=True) if author_elem else "저자를 찾을 수 없습니다."
-            
-            return {"title": title, "author": author, "url": url}
-        except Exception as e:
-            logger.error(f"도서 정보 추출 중 오류 발생: {e}")
-            return None
+        # (추가) ISBN 정보 추출 로직
+        isbn = "ISBN 정보 없음"
+        # '기본정보' 테이블의 모든 행(tr)을 찾습니다.
+        for tr in soup.select("div.prod_detail_area_bottom table tr"):
+            # 행의 첫번째 칸(th)에 'ISBN'이라는 텍스트가 있는지 확인합니다.
+            th = tr.find("th")
+            if th and "ISBN" in th.get_text():
+                # 만약 찾았다면, 바로 옆 칸(td)의 텍스트를 가져옵니다.
+                td = tr.find("td")
+                if td:
+                    isbn = td.get_text(strip=True)
+                break # ISBN을 찾았으니 더 이상 반복할 필요 없음
+        
+        # 추출한 모든 정보를 딕셔너리로 묶어서 반환
+        return {"title": title, "author": author, "url": url, "isbn": isbn}
+    except Exception as e:
+        logger.error(f"도서 정보 추출 중 오류 발생: {e}")
+        return None
+
+
+
+    
 
     # (개선) 신청자 이름과 신청 시간을 함께 받도록 함수 수정
     def add_book_to_sheet(self, book_info, user_name, request_time):
