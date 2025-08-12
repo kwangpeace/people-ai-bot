@@ -1,19 +1,24 @@
-
+# -*- coding: utf-8 -*-
+# 필요한 라이브러리들을 가져옵니다.
 import os
 import random
 import logging
 import re
 import json
+from datetime import datetime
+import asyncio
+
+# 웹 관련 라이브러리
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime
+from playwright.async_api import async_playwright
 
+# AI 및 슬랙, 구글 시트 관련 라이브러리
 import google.generativeai as genai
-from slack_bolt import App
 from slack_bolt.adapter.flask import SlackRequestHandler
+from slack_bolt.async_app import AsyncApp
 from flask import Flask, request
 
-# 구글 시트 연동을 위한 라이브러리
 import gspread
 from google.oauth2.service_account import Credentials
 
@@ -49,28 +54,32 @@ def setup_gspread_client():
 
 gs_client = setup_gspread_client()
 
-# --- 앱 초기화 ---
+# --- 앱 초기화 (비동기 방식으로 변경) ---
 try:
-    app = App(token=os.environ.get("SLACK_BOT_TOKEN"), signing_secret=os.environ.get("SLACK_SIGNING_SECRET"))
+    app = AsyncApp(token=os.environ.get("SLACK_BOT_TOKEN"), signing_secret=os.environ.get("SLACK_SIGNING_SECRET"))
     flask_app = Flask(__name__)
     handler = SlackRequestHandler(app)
-    logger.info("Slack App 및 Flask 앱 초기화 성공")
+    logger.info("Async Slack App 및 Flask 앱 초기화 성공")
 except Exception as e:
     logger.critical(f"앱 초기화 실패: {e}"); exit()
 
 # --- 메인 봇 클래스 ---
 class PeopleAIBot:
     def __init__(self):
-        try:
-            self.bot_id = app.client.auth_test()['user_id']
-        except Exception as e:
-            logger.error(f"봇 ID 가져오기 실패: {e}"); self.bot_id = None
-        
+        self.bot_id = None
         self.gemini_model = self.setup_gemini()
         self.knowledge_base = self.load_knowledge_file()
         self.help_text = self.load_help_file()
         self.responses = { "searching": ["잠시만요, 관련 정보를 찾고 있어요... 🕵️‍♀️", "생각하는 중... 🤔"] }
         self.setup_direct_answers()
+
+    async def initialize_bot_id(self):
+        try:
+            auth_test_response = await app.client.auth_test()
+            self.bot_id = auth_test_response['user_id']
+            logger.info(f"봇 ID({self.bot_id})를 성공적으로 가져왔습니다.")
+        except Exception as e:
+            logger.error(f"봇 ID 가져오기 실패: {e}")
 
     def setup_direct_answers(self):
         self.direct_answers = [
@@ -98,18 +107,20 @@ class PeopleAIBot:
             with open("help.md", 'r', encoding='utf-8') as f: return f.read()
         except FileNotFoundError: return "도움말 파일을 찾을 수 없습니다."
 
-    def extract_book_info(self, url):
+    async def extract_book_info(self, url):
         try:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
-            response = requests.get(url, headers=headers, timeout=15)
-            response.raise_for_status()
-            html_content = response.content.decode('utf-8', 'ignore')
+            async with async_playwright() as p:
+                browser = await p.chromium.launch()
+                page = await browser.new_page()
+                await page.goto(url, timeout=20000)
+                html_content = await page.content()
+                await browser.close()
 
             if not self.gemini_model:
                 logger.error("Gemini 모델이 초기화되지 않았습니다."); return None
 
             prompt = f"""
-            당신은 웹사이트 HTML 코드 분석 전문가입니다. 아래 HTML 코드에서 '책 제목', '저자', 'ISBN' 정보를 찾아 JSON 형식으로만 응답해주세요. 정보가 없으면 빈 문자열("")을 값으로 넣어주세요.
+            당신은 웹사이트 HTML 코드 분석 전문가입니다. 아래 HTML 코드에서 '책 제목', '저자', 'ISBN' 정보를 찾아 JSON 형식으로만 응답해주세요.
 
             [HTML 코드]
             {html_content[:8000]} 
@@ -119,17 +130,18 @@ class PeopleAIBot:
             """
             gemini_response = self.gemini_model.generate_content(prompt)
             json_str_match = re.search(r'\{.*\}', gemini_response.text, re.DOTALL)
+            
             if not json_str_match:
                 logger.error(f"Gemini가 JSON 형식으로 응답하지 않았습니다: {gemini_response.text}"); return None
             
             book_data = json.loads(json_str_match.group(0))
-            if not book_data.get("title") or not book_data.get("author"):
+            if not book_data.get("title"):
                  logger.warning(f"Gemini가 책 정보를 추출하지 못했습니다: {book_data}"); return None
             
-            logger.info(f"Gemini를 통해 책 정보 추출 성공: {book_data}")
+            logger.info(f"Playwright와 Gemini를 통해 책 정보 추출 성공: {book_data}")
             return {"title": book_data.get("title"), "author": book_data.get("author"), "url": url, "isbn": book_data.get("isbn", "정보 없음")}
         except Exception as e:
-            logger.error(f"Gemini를 이용한 도서 정보 추출 중 오류 발생: {e}"); return None
+            logger.error(f"Playwright를 이용한 도서 정보 추출 중 오류 발생: {e}"); return None
         
     def generate_answer(self, query):
         for item in self.direct_answers:
@@ -138,7 +150,6 @@ class PeopleAIBot:
         if not self.gemini_model or not self.knowledge_base:
             return "AI 모델 또는 지식 베이스가 준비되지 않았습니다."
         
-        # 사용자가 제공한 최신 프롬프트로 업데이트
         prompt = f"""
 [당신의 역할]
 당신은 '중고나라' 회사의 피플팀 AI 어시스턴트 '피플AI'입니다. 당신의 임무는 동료의 질문에 명확하고 간결하며, 가독성 높은 답변을 제공하는 것입니다.
@@ -284,65 +295,86 @@ def add_book_to_sheet(book_info, user_name):
     except Exception as e:
         logger.error(f"구글 시트 데이터 추가 실패: {e}"); return False, str(e)
 
-def handle_book_request(event, say):
+async def handle_book_request(event, say):
     thread_ts = event.get("ts")
     user_id = event.get("user")
     url = re.search(r"https?://\S+", event.get("text", "")).group(0)
-    processing_msg = say(text="✅ 도서 신청을 접수했습니다. 잠시만 기다려주세요...", thread_ts=thread_ts)
-    book_info = bot.extract_book_info(url)
+    
+    processing_msg_resp = await say(text="✅ 도서 신청을 접수했습니다. 잠시만 기다려주세요...", thread_ts=thread_ts)
+    processing_msg_ts = processing_msg_resp['ts']
+    
+    book_info = await bot.extract_book_info(url)
     if not book_info:
-        app.client.chat_update(channel=event.get("channel"), ts=processing_msg['ts'], text="⚠️ 해당 링크에서 책 정보를 찾을 수 없습니다. 링크를 다시 확인해주세요."); return
+        await app.client.chat_update(channel=event.get("channel"), ts=processing_msg_ts, text="⚠️ 해당 링크에서 책 정보를 찾을 수 없습니다. 링크를 다시 확인해주세요."); return
+    
     try:
-        user_name = app.client.users_info(user=user_id)["user"]["profile"].get("real_name", user_id)
+        user_info_resp = await app.client.users_info(user=user_id)
+        user_name = user_info_resp["user"]["profile"].get("real_name", user_id)
     except Exception as e:
         logger.error(f"Slack 사용자 정보 조회 실패: {e}"); user_name = "알수없음"
+    
     success, error_msg = add_book_to_sheet(book_info, user_name)
     reply_text = f"✅ 신청이 완료되었습니다.\n\n> *제목:* {book_info['title']}\n> *신청자:* {user_name}" if success else f"⚠️ 구글 시트에 기록 중 문제가 발생했습니다. (오류: {error_msg})"
-    app.client.chat_update(channel=event.get("channel"), ts=processing_msg['ts'], text=reply_text)
+    await app.client.chat_update(channel=event.get("channel"), ts=processing_msg_ts, text=reply_text)
 
-def handle_thread_reply(event, say):
+async def handle_thread_reply(event, say):
     clean_query = re.sub(f"<@{bot.bot_id}>", "", event.get("text", "")).strip()
     if not clean_query: return
-    thinking_message = say(text=random.choice(bot.responses['searching']), thread_ts=event.get("thread_ts"))
+    thinking_message_resp = await say(text=random.choice(bot.responses['searching']), thread_ts=event.get("thread_ts"))
+    thinking_message_ts = thinking_message_resp['ts']
     final_answer = bot.generate_answer(clean_query)
-    app.client.chat_update(channel=event.get("channel"), ts=thinking_message['ts'], text=final_answer)
+    await app.client.chat_update(channel=event.get("channel"), ts=thinking_message_ts, text=final_answer)
+
+async def handle_new_message(event, say):
+    text = event.get("text", "").strip()
+    if not text: return
+    message_ts = event.get("ts")
+    thinking_message_resp = await say(text=random.choice(bot.responses['searching']), thread_ts=message_ts)
+    thinking_message_ts = thinking_message_resp['ts']
+    final_answer = bot.generate_answer(text)
+    await app.client.chat_update(channel=event.get("channel"), ts=thinking_message_ts, text=final_answer)
 
 @app.event("message")
-def handle_all_message_events(body, say, logger):
+async def handle_all_message_events(body, say, logger):
     try:
         event = body["event"]
         if "subtype" in event or (bot.bot_id and event.get("user") == bot.bot_id): return
         text = event.get("text", "")
         thread_ts = event.get("thread_ts")
+
         if not thread_ts and re.search(r"https?://\S+", text) and ("도서신청" in text or "도서 신청" in text):
-            handle_book_request(event, say); return
-        if f"<@{bot.bot_id}>" in text:
-            if "도움말" in text:
-                say(text=bot.help_text, thread_ts=thread_ts if thread_ts else event.get("ts"))
-            elif thread_ts:
-                handle_thread_reply(event, say)
+            await handle_book_request(event, say); return
+        
+        if thread_ts:
+            if f"<@{bot.bot_id}>" in text:
+                await handle_thread_reply(event, say)
+        else:
+            if "도움말" in text.strip().lower():
+                await say(text=bot.help_text, thread_ts=event.get("ts"))
             else:
-                # 스레드 밖에서는 멘션된 경우에만 AI 답변을 하도록 수정
-                handle_new_message(event, say)
+                await handle_new_message(event, say)
     except Exception as e:
         logger.error(f"message 이벤트 처리 중 오류 발생: {e}", exc_info=True)
 
-# handle_new_message는 멘션이 있을 때만 호출되므로 별도 수정 필요 없음
-def handle_new_message(event, say):
-    channel_id = event.get("channel")
-    text = event.get("text", "").strip().replace(f"<@{bot.bot_id}>", "").strip()
-    if not text: return
-    message_ts = event.get("ts")
-    thinking_message = say(text=random.choice(bot.responses['searching']), thread_ts=message_ts)
-    final_answer = bot.generate_answer(text)
-    app.client.chat_update(channel=channel_id, ts=thinking_message['ts'], text=final_answer)
-
 @flask_app.route("/slack/events", methods=["POST"])
-def slack_events(): return handler.handle(request)
+def slack_events():
+    return handler.handle(request)
 
 @flask_app.route("/", methods=["GET"])
-def health_check(): return "피플AI (Gemini-Scraper 최종) 정상 작동중! 🟢"
+def health_check():
+    return "피플AI (Gemini-Scraper 최종) 정상 작동중! 🟢"
+
+async def main():
+    await bot.initialize_bot_id()
+    # In a server environment, the app is run by a WSGI server like Gunicorn
+    # For local development, you might run it like this:
+    # from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
+    # handler = AsyncSocketModeHandler(app, os.environ["SLACK_APP_TOKEN"])
+    # await handler.start_async()
 
 if __name__ == "__main__":
+    # This block is mainly for local testing. Gunicorn runs the 'flask_app'.
     port = int(os.environ.get("PORT", 3000))
+    # It's better to initialize bot_id once before running
+    asyncio.run(main())
     flask_app.run(host="0.0.0.0", port=port)
