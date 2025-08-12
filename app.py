@@ -95,10 +95,11 @@ class PeopleAIBot:
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
             
-            title_elem = soup.select_one('h1.prod_title, h1.title')
+            title_elem = soup.select_one('span.prod_title_text')
+
             title = title_elem.get_text(strip=True) if title_elem else "제목을 찾을 수 없습니다."
             
-            author_elem = soup.select_one('span.author')
+            author_elem = soup.select_one('a.author')
             author = author_elem.get_text(strip=True) if author_elem else "저자를 찾을 수 없습니다."
             
             return {"title": title, "author": author, "url": url}
