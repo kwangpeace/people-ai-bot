@@ -17,13 +17,14 @@ from slack_bolt.adapter.flask import SlackRequestHandler
 from flask import Flask, request
 
 # --- 환경 변수 체크 ---
+# 봇 실행에 필요한 모든 환경 변수 목록입니다.
 required_env = [
     "SLACK_BOT_TOKEN",
     "SLACK_SIGNING_SECRET",
     "GEMINI_API_KEY",
     "GOOGLE_SHEET_ID",
     "GOOGLE_CREDENTIALS_JSON",
-    "GITHUB_TOKEN" # (추가) GitHub 연동을 위한 토큰
+    "GITHUB_TOKEN" # GitHub 연동을 위한 토큰
 ]
 for key in required_env:
     if not os.environ.get(key):
@@ -60,8 +61,8 @@ class PeopleAIBot:
             logger.error(f"봇 ID 가져오기 실패: {e}")
             self.bot_id = None
 
-        # (개선) Railway 환경에서 안정적으로 작동하도록 GitHub에서 파일을 로드합니다.
-        github_repo = "kwangpeace/people-ai-bot" # 본인의 '사용자이름/저장소이름'으로 수정
+        # Railway 환경에서 안정적으로 작동하도록 GitHub에서 파일을 로드합니다.
+        github_repo = "kwangpeace/people-ai-bot" # !본인의 '사용자이름/저장소이름'으로 수정!
         self.knowledge_base = self.load_data_from_github(github_repo, "guide_data.txt")
         self.help_text = self.load_data_from_github(github_repo, "help.md", "도움말 파일을 찾을 수 없습니다.")
 
@@ -80,7 +81,7 @@ class PeopleAIBot:
                 logger.info(f"GitHub에서 '{path}' 파일을 성공적으로 로드했습니다.")
                 return response.text
             else:
-                logger.error(f"GitHub 파일 로드 실패. 상태 코드: {response.status_code}")
+                logger.error(f"GitHub에서 '{path}' 파일 로드 실패. 상태 코드: {response.status_code}")
                 return default_text
         except Exception as e:
             logger.error(f"GitHub 파일 로드 중 오류 발생: {e}")
@@ -136,7 +137,7 @@ class PeopleAIBot:
         if not self.worksheet:
             return False
         try:
-            # (개선) ISBN 정보까지 함께 기록합니다.
+            # 제목, 저자, ISBN, URL, 신청자, 신청일 순서로 기록
             self.worksheet.append_row([
                 book_info['title'],
                 book_info['author'],
@@ -152,16 +153,38 @@ class PeopleAIBot:
             return False
 
     def setup_gemini(self):
-        # ... (기존과 동일) ...
+        """Gemini AI 모델을 설정합니다."""
         try:
             genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
-            return genai.GenerativeModel("gemini-1.5-flash")
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            logger.info("Gemini API 활성화 완료.")
+            return model
         except Exception as e:
+            logger.error(f"Gemini 모델 설정 실패: {e}")
             return None
 
     def generate_answer(self, query):
-        # ... (기존과 동일) ...
-        return "AI 답변"
+        """사용자의 질문에 대해 AI 답변을 생성합니다."""
+        if not self.gemini_model: return "AI 모델이 설정되지 않아 답변할 수 없습니다."
+        if not self.knowledge_base: return "참고할 지식 데이터가 없어 답변할 수 없습니다."
+        
+        prompt = f"""
+        당신은 '중고나라'의 HR 어시스턴트 '피플AI봇'입니다. 제공된 참고자료를 바탕으로, 동료의 질문에 명확하고 친절하게 답변해주세요.
+        ---
+        [참고 자료]
+        {self.knowledge_base}
+        ---
+        [질문]
+        {query}
+        ---
+        [답변]
+        """
+        try:
+            response = self.gemini_model.generate_content(prompt)
+            return response.text
+        except Exception as e:
+            logger.error(f"Gemini API 호출 실패: {e}", exc_info=True)
+            return "죄송합니다. 답변을 생성하는 중 문제가 발생했어요. 😢"
 
 # 봇 인스턴스 생성
 bot = PeopleAIBot()
@@ -197,7 +220,6 @@ def handle_book_request(event, say):
         success = bot.add_book_to_sheet(book_info, user_name, request_time)
         
         if success:
-            # (개선) 완료 메시지에 ISBN 정보도 함께 보여줍니다.
             reply_text = (f"📚 *도서 신청이 완료되었습니다!*\n\n"
                           f"• *책 제목:* {book_info['title']}\n"
                           f"• *저자:* {book_info['author']}\n"
@@ -211,11 +233,52 @@ def handle_book_request(event, say):
     
     app.client.chat_update(channel=channel_id, ts=processing_msg['ts'], text=reply_text)
 
+def handle_general_query(event, say):
+    """AI를 통해 일반적인 질문에 답변하는 함수"""
+    channel_id = event.get("channel")
+    thread_ts = event.get("thread_ts", event.get("ts"))
+    query = event.get("text", "").replace(f"<@{bot.bot_id}>", "").strip()
 
+    if not query: return
+
+    thinking_message = say(text=random.choice(bot.responses['searching']), thread_ts=thread_ts)
+    final_answer = bot.generate_answer(query)
+    app.client.chat_update(channel=channel_id, ts=thinking_message['ts'], text=final_answer)
+
+# --- 메인 이벤트 핸들러 ---
 @app.event("message")
 def handle_message_events(body, say):
-    # ... (기존과 거의 동일, 분기 처리 로직) ...
-    # ... 핸들러가 handle_book_request, handle_general_query 등을 호출 ...
+    """모든 메시지 이벤트를 수신하고 적절한 핸들러로 분기합니다."""
+    try:
+        event = body["event"]
+        if "subtype" in event or (bot.bot_id and event.get("user") == bot.bot_id):
+            return
 
-# --- Flask 앱 라우팅 및 앱 실행 ---
-# ... (기존과 동일) ...
+        text = event.get("text", "").strip()
+        
+        if f"<@{bot.bot_id}>" in text:
+            clean_query = text.replace(f"<@{bot.bot_id}>", "").strip()
+
+            if "도서신청" in clean_query:
+                handle_book_request(event, say)
+            elif clean_query == "도움말":
+                say(text=bot.help_text, thread_ts=event.get("ts"))
+            else:
+                handle_general_query(event, say)
+
+    except Exception as e:
+        logger.error(f"message 이벤트 처리 중 오류 발생: {e}", exc_info=True)
+
+# --- Flask 앱 라우팅 ---
+@flask_app.route("/slack/events", methods=["POST"])
+def slack_events():
+    return handler.handle(request)
+
+@flask_app.route("/", methods=["GET"])
+def health_check():
+    return "PeopleAI Bot is running! 🟢"
+
+# --- 앱 실행 ---
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 3000))
+    flask_app.run(host="0.0.0.0", port=port)
