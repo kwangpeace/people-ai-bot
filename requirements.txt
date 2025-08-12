@@ -5,3 +5,4 @@ beautifulsoup4
 google-generativeai
 gspread
 google-auth-oauthlib
+gunicorn
