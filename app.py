@@ -1,3 +1,4 @@
+# 필요한 라이브러리들을 가져옵니다.
 import os
 import re
 import json
@@ -5,8 +6,7 @@ import random
 import logging
 import requests
 from bs4 import BeautifulSoup
-import gspread
-from google.oauth2 import service_account
+from datetime import datetime
 
 import google.generativeai as genai
 from slack_bolt import App
@@ -14,19 +14,19 @@ from slack_bolt.adapter.flask import SlackRequestHandler
 from flask import Flask, request
 
 # --- 환경 변수 체크 ---
+# 구글 관련 변수가 빠지고, N8N 웹훅 주소가 새로 추가되었습니다.
 required_env = [
     "SLACK_BOT_TOKEN",
     "SLACK_SIGNING_SECRET",
     "GEMINI_API_KEY",
-    "GOOGLE_SHEET_ID",
-    "GOOGLE_CREDENTIALS"
+    "N8N_BOOK_REQUEST_WEBHOOK" # n8n 연동을 위한 새 변수
 ]
 for key in required_env:
     if not os.environ.get(key):
         logging.critical(f"환경 변수 '{key}'가 설정되지 않았습니다. 앱을 시작할 수 없습니다.")
         exit()
 
-# --- 로깅 설정 ---
+# --- 로깅(기록) 설정 ---
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s',
                     handlers=[logging.StreamHandler()])
@@ -49,87 +49,65 @@ except Exception as e:
 class PeopleAIBot:
     def __init__(self):
         try:
-            self.bot_id = app.client.auth_test()['user_id']
+            auth_test = app.client.auth_test()
+            self.bot_id = auth_test['user_id']
             logger.info(f"봇 ID({self.bot_id})를 성공적으로 가져왔습니다.")
         except Exception as e:
             logger.error(f"봇 ID 가져오기 실패: {e}")
             self.bot_id = None
+        
+        # GitHub 연동을 통해 지식/도움말 데이터를 가져옵니다.
+        github_repo = "YOUR_GITHUB_USERNAME/YOUR_REPO_NAME" # !본인 정보로 수정!
+        self.knowledge_base = self.load_data_from_github(github_repo, "guide_data.txt")
+        self.help_text = self.load_data_from_github(github_repo, "help.md", "도움말을 찾을 수 없습니다.")
 
         self.gemini_model = self.setup_gemini()
-        self.worksheet = self.setup_google_sheets()
-        self.knowledge_base = self.load_knowledge_file()
-        self.help_text = self.load_help_file()
         self.responses = {"searching": ["잠시만요, 관련 정보를 찾고 있어요... 🕵️‍♀️", "생각하는 중... 🤔"]}
-        self.setup_direct_answers()
 
-    def setup_google_sheets(self):
-        """Google Sheets API를 설정하고 워크시트를 반환합니다."""
+    def load_data_from_github(self, repo, path, default_text=""):
+        """GitHub Private 저장소에서 파일 내용을 읽어옵니다."""
+        # 이 기능을 사용하려면 GITHUB_TOKEN 환경변수 설정이 필요합니다.
+        token = os.environ.get("GITHUB_TOKEN")
+        if not token:
+            logger.error(f"'{path}' 로드를 위한 GITHUB_TOKEN 환경 변수가 없습니다.")
+            return default_text
+        
+        url = f"https://raw.githubusercontent.com/{repo}/main/{path}"
+        headers = {"Authorization": f"token {token}"}
+        
         try:
-            scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-            creds_json_str = os.environ.get("GOOGLE_CREDENTIALS")
-
-            if creds_json_str:
-                logger.info("환경 변수에서 Google 인증 정보를 로드합니다.")
-                creds_info = json.loads(creds_json_str)
-                creds = service_account.Credentials.from_service_account_info(creds_info, scopes=scopes)
+            response = requests.get(url, headers=headers, timeout=5)
+            if response.status_code == 200:
+                logger.info(f"GitHub에서 '{path}' 파일을 성공적으로 로드했습니다.")
+                return response.text
             else:
-                logger.info("로컬 'credentials.json' 파일에서 Google 인증 정보를 로드합니다.")
-                creds = service_account.Credentials.from_service_account_file("credentials.json", scopes=scopes)
-
-            client = gspread.authorize(creds)
-            sheet_id = os.environ.get("GOOGLE_SHEET_ID")
-            spreadsheet = client.open_by_key(sheet_id)
-            worksheet = spreadsheet.worksheet("도서주문")
-            logger.info("Google Sheets '도서주문' 시트 초기화 성공.")
-            return worksheet
-        except Exception as e:
-            logger.critical(f"Google Sheets 초기화 실패: {e}", exc_info=True)
-            return None
+                return default_text
+        except Exception:
+            return default_text
 
     def extract_book_info(self, url):
-        """교보문고 URL에서 책 제목과 저자 정보를 추출합니다."""
+        """URL에서 책 정보를 추출합니다. (웹 스크래핑)"""
         try:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+            headers = {"User-Agent": "Mozilla/5.0"}
             response = requests.get(url, headers=headers, timeout=10)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
+            
             title_elem = soup.select_one('h1.prod_title, h1.title')
             title = title_elem.get_text(strip=True) if title_elem else "제목을 찾을 수 없습니다."
+            
             author_elem = soup.select_one('span.author')
             author = author_elem.get_text(strip=True) if author_elem else "저자를 찾을 수 없습니다."
-            logger.info(f"도서 정보 추출 성공: {title} / {author}")
+            
             return {"title": title, "author": author, "url": url}
         except Exception as e:
             logger.error(f"도서 정보 추출 중 오류 발생: {e}")
             return None
 
-    def add_book_to_sheet(self, book_info):
-        """추출된 도서 정보를 구글 시트에 추가합니다."""
-        if not self.worksheet:
-            logger.error("워크시트가 설정되지 않아 도서 정보를 추가할 수 없습니다.")
-            return False
-        try:
-            self.worksheet.append_row([book_info['title'], book_info['author'], book_info['url']])
-            logger.info(f"'{book_info['title']}'을(를) 구글 시트에 추가했습니다.")
-            return True
-        except Exception as e:
-            logger.error(f"구글 시트 추가 실패: {e}")
-            return False
-
-    def setup_direct_answers(self):
-        """AI를 거치지 않고 즉시 답변할 특정 질문과 답변을 설정합니다."""
-        self.direct_answers = [
-            {
-                "keywords": ["외부 회의실", "외부회의실", "스파크플러스 예약", "4층 회의실"],
-                "answer": """피플팀에서 예약 가능 여부를 확인한 후, 이 스레드로 답변을 드릴게요. (@김정수)"""
-            }
-        ]
-        logger.info("특정 질문에 대한 직접 답변(치트키) 설정 완료.")
-
     def setup_gemini(self):
+        """Gemini AI 모델을 설정합니다."""
         try:
-            gemini_api_key = os.environ.get("GEMINI_API_KEY")
-            genai.configure(api_key=gemini_api_key)
+            genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
             model = genai.GenerativeModel("gemini-1.5-flash")
             logger.info("Gemini API 활성화 완료.")
             return model
@@ -137,149 +115,116 @@ class PeopleAIBot:
             logger.error(f"Gemini 모델 설정 실패: {e}")
             return None
 
-    def load_knowledge_file(self):
-        try:
-            with open("guide_data.txt", 'r', encoding='utf-8') as f:
-                return f.read()
-        except FileNotFoundError:
-            logger.error("'guide_data.txt' 파일을 찾을 수 없습니다.")
-            return ""
-
-    def load_help_file(self):
-        try:
-            with open("help.md", 'r', encoding='utf-8') as f:
-                return f.read()
-        except FileNotFoundError:
-            logger.error("'help.md' 파일을 찾을 수 없습니다.")
-            return "기본 도움말: @피플AI에게 '도서신청' 또는 질문을 물어보세요!"
-
     def generate_answer(self, query):
-        for item in self.direct_answers:
-            for keyword in item["keywords"]:
-                if keyword in query:
-                    logger.info(f"'{keyword}' 키워드를 감지하여 지정된 답변을 반환합니다.")
-                    return item["answer"]
-
+        """사용자의 질문에 대해 AI 답변을 생성합니다."""
         if not self.gemini_model: return "AI 모델이 설정되지 않아 답변할 수 없습니다."
-        if not self.knowledge_base: return "지식 파일이 비어있어 답변할 수 없습니다."
+        if not self.knowledge_base: return "참고할 지식 데이터가 없어 답변할 수 없습니다."
         
         prompt = f"""
-        [당신의 역할]
-        당신은 '중고나라' 회사의 피플팀 AI 어시스턴트 '피플AI'입니다. 당신의 임무는 동료의 질문에 명확하고 간결하며, 가독성 높은 답변을 제공하는 것입니다.
-        
-        [답변 생성 원칙]
-        (기존의 긴 프롬프트 내용)
+        당신은 '중고나라'의 HR 어시스턴트 '피플AI봇'입니다. 제공된 참고자료를 바탕으로, 동료의 질문에 명확하고 친절하게 답변해주세요.
         ---
         [참고 자료]
         {self.knowledge_base}
         ---
         [질문]
         {query}
+        ---
         [답변]
         """
         try:
             response = self.gemini_model.generate_content(prompt)
-            if not response.text.strip():
-                logger.warning("Gemini API가 비어있는 응답을 반환했습니다.")
-                return "답변을 생성하는 데 조금 시간이 걸리고 있어요. 다시 한 번 시도해주시겠어요?"
-            
-            logger.info(f"Gemini 답변 생성 성공. (쿼리: {query[:30]}...)")
             return response.text
         except Exception as e:
             logger.error(f"Gemini API 호출 실패: {e}", exc_info=True)
-            return "음... 답변을 생성하는 도중 문제가 발생했어요. 잠시 후 다시 시도해보시겠어요? 😢"
+            return "죄송합니다. 답변을 생성하는 중 문제가 발생했어요. 😢"
 
+# 봇 인스턴스 생성
 bot = PeopleAIBot()
 
-def handle_new_message(event, say):
-    """스레드 밖의 새로운 메시지를 처리합니다."""
-    channel_id = event.get("channel")
-    text = event.get("text", "").strip()
-    message_ts = event.get("ts")
+# --- 새롭게 추가된 n8n 호출 함수 ---
+def trigger_n8n_book_request(book_info, user_name):
+    """n8n 도서신청 워크플로우를 호출(트리거)하는 함수"""
+    webhook_url = os.environ.get("N8N_BOOK_REQUEST_WEBHOOK")
     
-    if not text: return
+    try:
+        # n8n으로 보낼 데이터 묶음(payload)을 구성합니다.
+        payload = {
+            "title": book_info['title'],
+            "author": book_info['author'],
+            "url": book_info['url'],
+            "user_name": user_name,
+            "request_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+        response = requests.post(webhook_url, json=payload, timeout=10)
+        response.raise_for_status() # HTTP 에러 발생 시 예외 처리
+        
+        logger.info("n8n 워크플로우를 성공적으로 호출했습니다.")
+        return True
+    except requests.exceptions.RequestException as e:
+        logger.error(f"n8n 워크플로우 호출 실패: {e}")
+        return False
 
-    logger.info("새로운 메시지를 감지했습니다. 스레드를 시작하며 답변합니다.")
-    thinking_message = say(text=random.choice(bot.responses['searching']), thread_ts=message_ts)
-    final_answer = bot.generate_answer(text)
-    app.client.chat_update(channel=channel_id, ts=thinking_message['ts'], text=final_answer)
-
-def handle_thread_reply(event, say):
-    """스레드 내의 답글을 처리합니다."""
-    text = event.get("text", "")
-    if f"<@{bot.bot_id}>" in text:
-        logger.info("스레드 내에서 멘션을 감지하여 응답합니다.")
-        channel_id = event.get("channel")
-        thread_ts = event.get("thread_ts")
-        clean_query = text.replace(f"<@{bot.bot_id}>", "").strip()
-        if not clean_query: return
-
-        thinking_message = say(text=random.choice(bot.responses['searching']), thread_ts=thread_ts)
-        final_answer = bot.generate_answer(clean_query)
-        app.client.chat_update(channel=channel_id, ts=thinking_message['ts'], text=final_answer)
-
+# --- 슬랙 이벤트 핸들러 ---
 @app.event("message")
-def handle_all_message_events(body, say, logger):
+def handle_message_events(body, say):
+    """모든 메시지 이벤트를 수신하고 적절히 처리합니다."""
     try:
         event = body["event"]
-        logger.info(f"Received event: {event}")  # 전체 이벤트 로그
         if "subtype" in event or (bot.bot_id and event.get("user") == bot.bot_id):
-            logger.info("Event ignored due to subtype or bot self-message")
             return
 
         text = event.get("text", "").strip()
+        user_id = event.get("user")
         channel_id = event.get("channel")
         thread_ts = event.get("thread_ts", event.get("ts"))
-        message_ts = event.get("ts")
-        files = event.get("files", [])  # 파일 정보 확인
 
-        logger.info(f"Processing message - text: {text}, channel: {channel_id}, thread_ts: {thread_ts}, files: {files}")
+        if f"<@{bot.bot_id}>" in text:
+            clean_query = text.replace(f"<@{bot.bot_id}>", "").strip()
 
-        if text == "도움말":
-            logger.info(f"'{event.get('user')}' 사용자가 도움말을 요청했습니다.")
-            reply_ts = thread_ts if thread_ts else message_ts
-            say(text=bot.help_text, thread_ts=reply_ts)
-            return
-
-        # 도서 신청은 @피플AI 호출 필요, 텍스트 URL만 지원
-        book_request_pattern = re.search(f"<@{bot.bot_id}>\\s+도서신청\\s+(https?://[^\\s]+)", text)  # URL 매칭 개선
-        if book_request_pattern:
-            if files:
-                logger.info("Image detected, rejecting book request")
-                say(text="⚠️ 도서 신청에는 이미지를 첨부하지 말고, 텍스트로 교보문고 URL을 입력해주세요.", thread_ts=thread_ts)
-                return
-            url = book_request_pattern.group(1)
-            logger.info(f"Detected book request with URL: {url}")
-            say(text=f"✅ 도서 신청을 접수했습니다. 잠시만 기다려주세요...\n> {url}", thread_ts=thread_ts)
-            
-            book_info = bot.extract_book_info(url)
-            if book_info and book_info["title"] != "제목을 찾을 수 없습니다.":
-                success = bot.add_book_to_sheet(book_info)
-                if success:
-                    reply_text = (f"📚 *도서 신청이 완료되었습니다!*\n\n"
-                                  f"• *책 제목:* {book_info['title']}\n"
-                                  f"• *저자:* {book_info['author']}\n\n"
-                                  f"🔗 구글 시트에 정상적으로 추가되었습니다.")
+            # "도서신청" 명령어 우선 처리
+            if clean_query.startswith("도서신청"):
+                url_match = re.search(r"https?://\S+", clean_query)
+                if not url_match:
+                    say(text="⚠️ 도서신청 명령어와 함께 교보문고 URL을 입력해주세요.", thread_ts=thread_ts)
+                    return
+                
+                url = url_match.group(0)
+                processing_msg = say(text=f"✅ 도서 신청을 접수했습니다. n8n 워크플로우에 전달할게요...", thread_ts=thread_ts)
+                
+                book_info = bot.extract_book_info(url)
+                if book_info and book_info["title"] != "제목을 찾을 수 없습니다.":
+                    user_info = app.client.users_info(user=user_id)
+                    user_name = user_info["user"]["profile"].get("real_name", user_id)
+                    
+                    # 구글 시트 함수 대신 n8n 호출 함수를 실행합니다.
+                    success = trigger_n8n_book_request(book_info, user_name)
+                    
+                    if success:
+                        reply_text = "✅ n8n에 도서 신청을 안전하게 전달했습니다! 잠시 후 구글 시트를 확인해주세요."
+                    else:
+                        reply_text = "⚠️ n8n 워크플로우를 호출하는 중 문제가 발생했습니다. 피플팀에 문의해주세요."
                 else:
-                    reply_text = "⚠️ 도서 정보는 찾았지만, 구글 시트에 추가하는 중 문제가 발생했습니다."
-            else:
-                reply_text = "⚠️ 해당 링크에서 도서 정보를 찾을 수 없습니다. 교보문고 상품 상세 링크가 맞는지 확인해주세요."
-            
-            app.client.chat_postMessage(channel=channel_id, text=reply_text, thread_ts=thread_ts)
-            return
+                    reply_text = "⚠️ 해당 링크에서 도서 정보를 찾을 수 없습니다. 교보문고 상품 상세 링크가 맞는지 확인해주세요."
+                
+                app.client.chat_update(channel=channel_id, ts=processing_msg['ts'], text=reply_text)
+                return
 
-        # @ 호출 없이도 일반 질문 및 도움말 외 처리
-        if text and not book_request_pattern:
-            if event.get("thread_ts"):
-                logger.info("Processing thread reply without mention")
-                handle_thread_reply(event, say)
-            else:
-                logger.info("Starting new thread without mention")
-                handle_new_message(event, say)
+            # "도움말" 명령어 처리
+            if clean_query == "도움말":
+                say(text=bot.help_text, thread_ts=thread_ts)
+                return
+
+            # 그 외 모든 멘션은 AI 답변으로 처리
+            if clean_query:
+                thinking_msg = say(text=random.choice(bot.responses['searching']), thread_ts=thread_ts)
+                final_answer = bot.generate_answer(clean_query)
+                app.client.chat_update(channel=channel_id, ts=thinking_msg['ts'], text=final_answer)
 
     except Exception as e:
         logger.error(f"message 이벤트 처리 중 오류 발생: {e}", exc_info=True)
 
+# --- Flask 앱 라우팅 ---
 @flask_app.route("/slack/events", methods=["POST"])
 def slack_events():
     return handler.handle(request)
@@ -288,6 +233,7 @@ def slack_events():
 def health_check():
     return "PeopleAI Bot is running! 🟢"
 
+# --- 앱 실행 ---
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 3000))
     flask_app.run(host="0.0.0.0", port=port)
