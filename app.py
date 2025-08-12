@@ -57,7 +57,7 @@ class PeopleAIBot:
             self.bot_id = None
         
         # GitHub 연동을 통해 지식/도움말 데이터를 가져옵니다.
-        github_repo = "YOUR_GITHUB_USERNAME/YOUR_REPO_NAME" # !본인 정보로 수정!
+        github_repo = "https://github.com/kwangpeace/people-ai-bot" # !본인 정보로 수정!
         self.knowledge_base = self.load_data_from_github(github_repo, "guide_data.txt")
         self.help_text = self.load_data_from_github(github_repo, "help.md", "도움말을 찾을 수 없습니다.")
 
