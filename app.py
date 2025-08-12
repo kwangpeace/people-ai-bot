@@ -346,4 +346,3 @@ def health_check(): return "피플AI (Gemini-Scraper 최종) 정상 작동중! �
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 3000))
     flask_app.run(host="0.0.0.0", port=port)
-```
