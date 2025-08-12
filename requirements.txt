@@ -15,3 +15,4 @@ transformers==4.30.0
 beautifulsoup4
 gspread
 google-auth-oauthlib
+pytz  
