@@ -14,12 +14,11 @@ from slack_bolt import App
 from slack_bolt.adapter.flask import SlackRequestHandler
 from flask import Flask, request
 
-# (추가) 구글 시트 연동을 위한 라이브러리
+# 구글 시트 연동을 위한 라이브러리
 import gspread
 from google.oauth2.service_account import Credentials
 
 # --- 환경 변수 체크 ---
-# (수정) 구글 시트 연동에 필요한 환경 변수 추가
 required_env = [
     "SLACK_BOT_TOKEN",
     "SLACK_SIGNING_SECRET",
@@ -36,7 +35,7 @@ for key in required_env:
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler()])
 logger = logging.getLogger(__name__)
 
-# --- (추가) 구글 시트 클라이언트 초기화 ---
+# --- 구글 시트 클라이언트 초기화 ---
 def setup_gspread_client():
     try:
         creds_json_str = os.environ.get("GOOGLE_CREDENTIALS_JSON")
@@ -82,8 +81,7 @@ class PeopleAIBot:
         self.direct_answers = [
             {
                 "keywords": ["외부 회의실", "외부회의실", "스파크플러스 예약", "4층 회의실"],
-                "answer": """🔄 외부 회의실 예약 안내내
-피플팀에서 예약 가능 여부를 확인한 후, 이 스레드로 답변을 드릴게요. (@김정수)"""
+                "answer": """🔄 외부 회의실 예약 안내\n\n외부 회의실(스파크플러스) 예약이 필요하시면, 이 스레드에 **[날짜/시간, 예상 인원, 사용 목적]**을 모두 남겨주세요. 피플팀에서 예약 가능 여부를 확인한 후 답변 드리겠습니다. (담당: @김정수)"""
             }
         ]
         logger.info("특정 질문에 대한 직접 답변(치트키) 설정 완료.")
@@ -92,7 +90,7 @@ class PeopleAIBot:
         try:
             gemini_api_key = os.environ.get("GEMINI_API_KEY")
             genai.configure(api_key=gemini_api_key)
-            model = genai.GenerativeModel("gemini-1.5-flash") # gemini-2.0-flash 대신 최신 모델 사용 권장
+            model = genai.GenerativeModel("gemini-1.5-flash")
             logger.info("Gemini API 활성화 완료.")
             return model
         except Exception as e:
@@ -110,57 +108,46 @@ class PeopleAIBot:
         except FileNotFoundError:
             logger.error("'help.md' 파일을 찾을 수 없습니다."); return "도움말 파일을 찾을 수 없습니다."
 
+    # (수정) 클래스 내부로 함수를 이동시켰습니다.
+    def extract_book_info(self, url):
+        """(업그레이드 버전) meta 태그를 우선적으로 사용하여 안정성을 높인 정보 추출 함수"""
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, "html.parser")
 
+            title_meta = soup.find("meta", property="og:title")
+            author_meta = soup.find("meta", attrs={"name": "author"})
+            isbn_meta = soup.find("meta", attrs={"name": "isbn"})
 
-def extract_book_info(self, url):
-    """(업그레이드 버전) meta 태그를 우선적으로 사용하여 안정성을 높인 정보 추출 함수"""
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser")
+            title = title_meta["content"] if title_meta else None
+            author = author_meta["content"] if author_meta else None
+            isbn = isbn_meta["content"] if isbn_meta else None
 
-        # 1순위: meta 태그에서 정보 추출 (가장 안정적)
-        title_meta = soup.find("meta", property="og:title")
-        author_meta = soup.find("meta", attrs={"name": "author"})
-        isbn_meta = soup.find("meta", attrs={"name": "isbn"})
+            if not title:
+                title_elem = soup.select_one('h1.prod_title, span.prod_title_text, h1.title')
+                title = title_elem.get_text(strip=True) if title_elem else "제목을 찾을 수 없습니다."
+            
+            if not author:
+                author_elem = soup.select_one('a.author, span.author')
+                author = author_elem.get_text(strip=True) if author_elem else "저자를 찾을 수 없습니다."
 
-        title = title_meta["content"] if title_meta else None
-        author = author_meta["content"] if author_meta else None
-        isbn = isbn_meta["content"] if isbn_meta else None
+            if not isbn:
+                for tr in soup.select("div.prod_detail_area_bottom table tr"):
+                    if th := tr.find("th", string=re.compile("ISBN")):
+                        if td := tr.find("td"):
+                            isbn = td.get_text(strip=True); break
+                if not isbn or isbn == "ISBN 정보 없음":
+                     isbn = "ISBN 정보 없음"
 
-        # 2순위: meta 태그에 정보가 없을 경우, 기존의 HTML 태그에서 추출 시도 (예비용)
-        if not title:
-            title_elem = soup.select_one('h1.prod_title, span.prod_title_text, h1.title')
-            title = title_elem.get_text(strip=True) if title_elem else "제목을 찾을 수 없습니다."
+            logger.info(f"책 정보 추출 성공: 제목={title}, 저자={author}")
+            return {"title": title, "author": author, "url": url, "isbn": isbn}
+
+        except Exception as e:
+            logger.error(f"도서 정보 추출 중 오류 발생: {e}")
+            return None
         
-        if not author:
-            author_elem = soup.select_one('a.author, span.author')
-            author = author_elem.get_text(strip=True) if author_elem else "저자를 찾을 수 없습니다."
-
-        if not isbn:
-            for tr in soup.select("div.prod_detail_area_bottom table tr"):
-                if th := tr.find("th", string=re.compile("ISBN")):
-                    if td := tr.find("td"):
-                        isbn = td.get_text(strip=True)
-                        break
-            if not isbn or isbn == "ISBN 정보 없음": # 최종적으로도 못찾으면 기본값 설정
-                 isbn = "ISBN 정보 없음"
-
-
-        logger.info(f"책 정보 추출 성공: 제목={title}, 저자={author}")
-        return {"title": title, "author": author, "url": url, "isbn": isbn}
-
-    except Exception as e:
-        logger.error(f"도서 정보 추출 중 오류 발생: {e}")
-        return None
-        
-
-
-
-    
     def generate_answer(self, query):
         for item in self.direct_answers:
             if any(keyword in query for keyword in item["keywords"]):
@@ -170,8 +157,8 @@ def extract_book_info(self, url):
         if not self.gemini_model or not self.knowledge_base:
             return "AI 모델 또는 지식 베이스가 준비되지 않았습니다."
         
-        # 기존의 상세한 프롬프트를 그대로 유지합니다.
         prompt = f"""
+ prompt = f"""
 [당신의 역할]
 당신은 '중고나라' 회사의 피플팀 AI 어시스턴트 '피플AI'입니다. 당신의 임무는 동료의 질문에 명확하고 간결하며, 가독성 높은 답변을 제공하는 것입니다.
 
@@ -358,7 +345,6 @@ def extract_book_info(self, url):
 
 bot = PeopleAIBot()
 
-# (추가) 구글 시트에 데이터 추가하는 함수
 def add_book_to_sheet(book_info, user_name):
     if not gs_client:
         logger.error("구글 시트 클라이언트가 초기화되지 않아 작업을 중단합니다.")
@@ -375,7 +361,6 @@ def add_book_to_sheet(book_info, user_name):
     except Exception as e:
         logger.error(f"구글 시트 데이터 추가 실패: {e}"); return False, str(e)
 
-# (추가) 도서 신청을 처리하는 메인 핸들러
 def handle_book_request(event, say):
     thread_ts = event.get("ts")
     user_id = event.get("user")
@@ -407,30 +392,28 @@ def handle_book_request(event, say):
     app.client.chat_update(channel=event.get("channel"), ts=processing_msg['ts'], text=reply_text)
 
 def handle_new_message(event, say):
-    """스레드 밖의 새로운 메시지를 처리합니다."""
     channel_id = event.get("channel")
     text = event.get("text", "").strip()
-    message_ts = event.get("ts")
     if not text or len(text) < 2: return
-    logger.info("새로운 메시지를 감지했습니다. 스레드를 시작하며 답변합니다.")
+    
+    clean_query = text.replace(f"<@{bot.bot_id}>", "").strip()
+    message_ts = event.get("ts")
+
     thinking_message = say(text=random.choice(bot.responses['searching']), thread_ts=message_ts)
-    final_answer = bot.generate_answer(text)
+    final_answer = bot.generate_answer(clean_query)
     app.client.chat_update(channel=channel_id, ts=thinking_message['ts'], text=final_answer)
 
 def handle_thread_reply(event, say):
-    """스레드 내의 답글을 처리합니다."""
     text = event.get("text", "")
-    if f"<@{bot.bot_id}>" in text:
-        logger.info("스레드 내에서 멘션을 감지하여 응답합니다.")
-        channel_id = event.get("channel")
-        thread_ts = event.get("thread_ts")
-        clean_query = text.replace(f"<@{bot.bot_id}>", "").strip()
-        if not clean_query: return
-        thinking_message = say(text=random.choice(bot.responses['searching']), thread_ts=thread_ts)
-        final_answer = bot.generate_answer(clean_query)
-        app.client.chat_update(channel=channel_id, ts=thinking_message['ts'], text=final_answer)
+    clean_query = text.replace(f"<@{bot.bot_id}>", "").strip()
+    if not clean_query: return
 
-# (수정) 모든 메시지 이벤트를 처리하는 메인 라우터
+    channel_id = event.get("channel")
+    thread_ts = event.get("thread_ts")
+    thinking_message = say(text=random.choice(bot.responses['searching']), thread_ts=thread_ts)
+    final_answer = bot.generate_answer(clean_query)
+    app.client.chat_update(channel=channel_id, ts=thinking_message['ts'], text=final_answer)
+
 @app.event("message")
 def handle_all_message_events(body, say, logger):
     try:
@@ -440,28 +423,18 @@ def handle_all_message_events(body, say, logger):
         text = event.get("text", "")
         thread_ts = event.get("thread_ts")
 
-        # 1순위: 멘션 없이 '도서신청' 키워드와 URL이 포함된 메시지 감지
         if not thread_ts and re.search(r"https?://\S+", text) and ("도서신청" in text or "도서 신청" in text):
             logger.info(f"도서신청 키워드 및 URL 감지: {text[:50]}...")
             handle_book_request(event, say)
             return
 
-        # 2순위: '도움말' 명령어 처리
-        if text.strip() == "도움말":
-            logger.info(f"'{event.get('user')}' 사용자가 도움말을 요청했습니다.")
-            reply_ts = thread_ts if thread_ts else event.get("ts")
-            say(text=bot.help_text, thread_ts=reply_ts)
-            return
-        
-        # 3순위: 기존 AI 답변 로직 (스레드 안/밖 구분)
-        if thread_ts:
-            handle_thread_reply(event, say)
-        else:
-            # 채널의 모든 메시지에 AI가 답변하지 않도록, 멘션이 있을 때만 답변하게 할 수 있습니다.
-            # 만약 모든 메시지에 답변하게 하려면 아래 if문을 제거하세요.
-            if f"<@{bot.bot_id}>" in text:
-                 handle_new_message(event, say)
-
+        if f"<@{bot.bot_id}>" in text:
+            if "도움말" in text:
+                say(text=bot.help_text, thread_ts=thread_ts if thread_ts else event.get("ts"))
+            elif thread_ts:
+                handle_thread_reply(event, say)
+            else:
+                handle_new_message(event, say)
 
     except Exception as e:
         logger.error(f"message 이벤트 처리 중 오류 발생: {e}", exc_info=True)
