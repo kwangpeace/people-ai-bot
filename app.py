@@ -14,8 +14,8 @@ from playwright.async_api import async_playwright
 
 # AI 및 슬랙, 구글 시트 관련 라이브러리
 import google.generativeai as genai
-# (수정) AsyncApp과 함께 사용될 AsyncSlackRequestHandler를 임포트합니다.
-from slack_bolt.adapter.flask.async_handler import AsyncSlackRequestHandler
+# (수정) 올바른 경로에서 AsyncSlackRequestHandler를 임포트합니다.
+from slack_bolt.adapter.flask.handler import AsyncSlackRequestHandler
 from slack_bolt.async_app import AsyncApp
 from flask import Flask, request
 
@@ -57,7 +57,6 @@ gs_client = setup_gspread_client()
 # --- 앱 초기화 (비동기) ---
 app = AsyncApp(token=os.environ.get("SLACK_BOT_TOKEN"), signing_secret=os.environ.get("SLACK_SIGNING_SECRET"))
 flask_app = Flask(__name__)
-# (수정) AsyncApp에 맞는 AsyncSlackRequestHandler를 사용합니다.
 handler = AsyncSlackRequestHandler(app)
 
 # --- 메인 봇 클래스 ---
@@ -71,9 +70,10 @@ class PeopleAIBot:
 
     async def initialize_bot_id(self):
         try:
-            auth_test_response = await app.client.auth_test()
-            self.bot_id = auth_test_response['user_id']
-            logger.info(f"봇 ID({self.bot_id})를 성공적으로 가져왔습니다.")
+            if not self.bot_id:
+                auth_test_response = await app.client.auth_test()
+                self.bot_id = auth_test_response['user_id']
+                logger.info(f"봇 ID({self.bot_id})를 성공적으로 가져왔습니다.")
         except Exception as e:
             logger.error(f"봇 ID 가져오기 실패: {e}")
 
@@ -131,8 +131,8 @@ class PeopleAIBot:
             logger.error(f"Playwright를 이용한 도서 정보 추출 중 오류 발생: {e}"); return None
         
     def generate_answer(self, query):
-        if not self.gemini_model or not self.knowledge_base:
-            return "AI 모델 또는 지식 베이스가 준비되지 않았습니다."
+        if not self.gemini_model:
+            return "AI 모델이 준비되지 않았습니다."
         
         prompt = f"""
 [당신의 역할]
@@ -206,7 +206,7 @@ async def handle_new_message(event, say):
 
 @app.event("message")
 async def handle_all_message_events(body, say, logger):
-    await bot.initialize_bot_id() # 봇 ID가 초기화되었는지 확인
+    await bot.initialize_bot_id()
     try:
         event = body["event"]
         if "subtype" in event or (bot.bot_id and event.get("user") == bot.bot_id): return
@@ -225,7 +225,6 @@ async def handle_all_message_events(body, say, logger):
     except Exception as e:
         logger.error(f"message 이벤트 처리 중 오류 발생: {e}", exc_info=True)
 
-# (수정) 핸들러가 비동기이므로, Flask 라우트도 비동기로 만들어주고 await로 호출합니다.
 @flask_app.route("/slack/events", methods=["POST"])
 async def slack_events():
     return await handler.handle(request)
@@ -236,4 +235,4 @@ def health_check():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 3000))
-    flask_app.run(host="0.0.0.0", port=port)
+    flask_app.run(host="host", port=port)
