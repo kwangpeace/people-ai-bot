@@ -62,7 +62,7 @@ class PeopleAIBot:
         try:
             gemini_api_key = os.environ.get("GEMINI_API_KEY")
             genai.configure(api_key=gemini_api_key)
-            model = genai.GenerativeModel("gemini-2.0-flash")
+            model = genai.GenerativeModel("gemini-2.5-flash")
             logger.info("Gemini API 활성화 완료.")
             return model
         except Exception as e:
