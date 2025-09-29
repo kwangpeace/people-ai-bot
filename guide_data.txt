@@ -90,10 +90,10 @@
 - 운영 방식: 중고나라에서는 내부 '직원용' 와이파이와 '외부 방문객용' 와이파이를 분리하여 운영하고 있습니다.
 - 방문객 안내 지침: 회사에 외부 손님이 방문했을 경우에는 '외부 방문객용' 와이파이 정보를 안내해주시기 바랍니다.
 - 중고나라 직원용 와이파이
-  - SSID (네트워크 이름): joonggonara-2G / joonggonara-5G
+  - SSID (네트워크 이름): joonggonara-5G
   - 비밀번호 (PW): jn2023!@
 - 외부 방문객용 와이파이
-  - SSID (네트워크 이름): joonggonara-guest-2G / joonggonara-guest-5G
+  - SSID (네트워크 이름): joonggonara-guest-5G
   - 비밀번호 (PW): guest2023!@
 
 #### 1.3.3. 와이파이(Wi-Fi) 이용 안내
