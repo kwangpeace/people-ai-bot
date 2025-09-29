@@ -183,11 +183,11 @@ class PeopleAIBot:
 사내 와이파이 정보를 안내해 드릴게요.
 
 🏢 직원용 Wi-Fi
-- SSID: joonggonara-2G / joonggonara-5G
+- SSID: joonggonara-5G
 - 비밀번호: jn2023!@
 
 👥 방문객용 Wi-Fi
-- SSID: joonggonara-guest-2G / joonggonara-guest-5G
+- SSID: joonggonara-guest-5G
 - 비밀번호: guest2023!@
 
 💡 보안을 위해 직원용과 방문객용 네트워크가 분리되어 있으니, 외부 손님께는 반드시 방문객용 정보를 안내해주세요.
